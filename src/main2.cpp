@@ -549,18 +549,18 @@ void debugBMUmsg(int Module){
 
     Serial.print("BMU Operation Status: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
     Serial.print("Cell balancing discharge: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells);
-    Serial.print("V_CELL C1-10: ");
+    Serial.print("V_CELL[10]: ");
     // can change to vector , for easy looping funcion
     for(short i=0; i< CELL_NUM; i++){
       Serial.print(BMU_Package[Module].V_CELL[i]); Serial.print("V.  ");
     } Serial.println();
+    
     Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE); Serial.println("V.  ");
-    Serial.print("AVG_CELL_VOLTAGE_DIFF: ") ; Serial.print(BMU_Package[Module].DV); Serial.println("V.  ");
+    Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV); Serial.println("V.  ");
 
-    Serial.print("TEMP_SENSOR T1-T2: ");
-    for(short i=0; i< TEMP_SENSOR_NUM; i++){
-      Serial.print(BMU_Package[Module].TEMP_SENSE[i]); Serial.print("C.  ");
-    } Serial.println();
+    Serial.print("TEMP[2]: ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[0]); Serial.println("C.  ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[1]); Serial.println("C.  ");
 
     Serial.println();
 
@@ -623,19 +623,4 @@ void debugOBCmsg(){
         Serial.println("OBC Detect COMMUNICATION Time out: (6s)");
         break;
     } 
-}
-void debugSDC(){
-  
-  // Signal = 1 means at fault
-  if(CAN_TIMEOUT_FLG)
-    Serial.println();
-
-  // Signal = 0 means at fault
-  if(!SDC_Signal_Board.AIRplus)
-    Serial.println("SDC_OK_SiGNAL: OFF");
-  if(!SDC_Signal_Board.IMD_Relay)
-    Serial.println("IMD_OK = 0");
-  if(!SDC_Signal_Board.BSPD_Relay)
-    Serial.println("BSPD_OK = 0");
-  
 }
