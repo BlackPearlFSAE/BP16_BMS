@@ -339,7 +339,11 @@ void setup()
   mcp2515.setNormalMode();
 
   
+<<<<<<< HEAD
   // mcp2515.setFilter(MCP2515::RXF0,true,0x01EE5000);
+=======
+
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
   // In measurement loop0.
   wakeup_idle(TOTAL_IC);
   delay(100);
@@ -382,12 +386,18 @@ void loop()
     temp1 = getTemp(A0);
     temp2 = getTemp(A3);
     // delay(500);
+<<<<<<< HEAD
     if(writeFlag){
       saveEEPROM();
+=======
+    // if(writeFlag){
+    //   saveEEPROM();
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
 
           // Serial.print("writeFlag before : ");Serial.println(writeFlag);
       
           // Serial.print("writeFlag after reset : ");Serial.println(writeFlag);
+<<<<<<< HEAD
     }
     // Serial.println("outside already");
     writeFlag = 0;
@@ -400,6 +410,18 @@ void loop()
     }
     
     // delay(100);
+=======
+    // }
+    // Serial.println("outside already");
+    // writeFlag = 0;
+
+    // Serial.print("writeFlag after IF : ");Serial.println(writeFlag);
+
+    readCAN(); 
+    extractCAN();
+    
+    delay(100);
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
     measurement_loop(DATALOG_DISABLED, timeOut, sync, charging, balanceActive, voltFull);
 
   }
@@ -1410,11 +1432,18 @@ void debugFrame1() {
 void readCAN(){
     if (mcp2515.readMessage(&readFrame) == MCP2515::ERROR_OK) {
     received_id = frame.can_id & ~CAN_EFF_FLAG;
+<<<<<<< HEAD
     // received_id = frame.can_id;
     // Serial.print(readFrame.can_id, HEX); // print ID
     // Serial.print(" "); 
     // Serial.print(readFrame.can_dlc, HEX); // print DLC
     // Serial.print(" ");
+=======
+    Serial.print(readFrame.can_id, HEX); // print ID
+    Serial.print(" "); 
+    Serial.print(readFrame.can_dlc, HEX); // print DLC
+    Serial.print(" ");
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
     Serial.print("received iD : ");Serial.println(received_id,HEX);
     for (int i = 0; i<readFrame.can_dlc; i++)  {
       Serial.print(readFrame.data[i],HEX);
@@ -1423,8 +1452,13 @@ void readCAN(){
 
   }else{
     readFrame = can_frame();
+<<<<<<< HEAD
     // Serial.println("reset frame");
     // Serial.print("flag : ");Serial.println(readFrame.data[6]);
+=======
+    Serial.println("reset frame");
+    Serial.print("flag : ");Serial.println(readFrame.data[6]);
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
   }
 }
 
@@ -1442,6 +1476,7 @@ void extractCAN(){
     dVMax = readFrame.data[5];
 
     writeFlag = readFrame.data[6];
+<<<<<<< HEAD
     
     // Serial.print("maxVolt : ");Serial.println(maxVolt);
     Serial.print("writeFlag : ");Serial.println(writeFlag);
@@ -1449,6 +1484,15 @@ void extractCAN(){
     Serial.print("charging : ");Serial.println(charging);
     Serial.print("maxVOlt : ");Serial.println(maxVolt);
     Serial.print("minVolt : ");Serial.println(minVolt);
+=======
+
+    // Serial.print("maxVolt : ");Serial.println(maxVolt);
+    // Serial.print("writeFlag : ");Serial.println(writeFlag);
+    // Serial.print("sync : ");Serial.println(sync);
+    // Serial.print("charging : ");Serial.println(charging);
+    // Serial.print("maxVOlt : ");Serial.println(maxVolt);
+    // Serial.print("minVolt : ");Serial.println(minVolt);
+>>>>>>> a558cca7aa43c9c4352097691c17b8b409471b9e
     // Serial.print("tMax : ");Serial.println(tMax);
     // Serial.print("dVMax : ");Serial.println(dVMax);
 }

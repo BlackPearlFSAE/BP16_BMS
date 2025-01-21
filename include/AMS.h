@@ -44,8 +44,8 @@ struct AMSdata {
 
   float ACCUM_VOLTAGE = 0.0; 
   float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Expected
-  // float ACCUMULATOR_MINVOLTAGE = VMIN_CELL * CELL_NUM * BMU_NUM; // Expected
-  float ACCUM_MINVOLTAGE = 40.0; // Expected
+  float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * BMU_NUM; // Expected
+  // float ACCUM_MINVOLTAGE = 40.0; // Expected
   bool ACCUM_CHG_READY = 0;
 
   bool OVERVOLT_WARNING = 0;
@@ -72,11 +72,18 @@ struct OBCdata {
 
 
 // Physical condition of SDC and LV Circuit, safety information , and relay it to Telemetry system
-struct SDCsignal {
+struct LVsignal {
   // Logic Shifter sensor Reading
   bool AIRplus = 1; // AIR+
   bool IMD_Relay = 1; // IMD_OUT
   bool BSPD_Relay = 1; // BSPD_OUT
+  bool EMERGENCY_BUTTON = 1;
 
   // BSPDADCreadingStatus
+  // ADC
+  uint16_t BrakePressure1;
+  uint16_t BrakePressure2;
+  uint16_t AccelPedal1;
+  uint16_t AccelPedal2;
+  uint16_t CurrentSense;
 };

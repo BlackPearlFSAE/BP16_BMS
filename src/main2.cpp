@@ -8,15 +8,16 @@ Read from BMU
 Read from BAMOCAR
 RTOS and Push ROS topics
 */
-
 /************************* Includes ***************************/
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include <driver/gpio.h>
-#include <driver/twai.h>    
-// #include <freertos/FreeRTOS.h>
-// #include <micro_ros_arduino.h>
-// #include "FS.h"
+#include <driver/twai.h>
+#include <freertos/FreeRTOS.h>  
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/timers.h>       
+// #include "LittleFS.h"
 // #include "SD.h"
 // #include "SPI.h"
 #include <Arduino.h>
@@ -24,63 +25,62 @@ RTOS and Push ROS topics
 // utility function
 #include <util.h>
 #include <AMS.h>
-
+// #include <micro_ros_arduino.h>
 /************************* Define macros *****************************/
-#define CAN_RX  GPIO_NUM_13
+#define CAN_RX  GPIO_NUM_13 // This will be 
 #define CAN_TX  GPIO_NUM_14
-#define BSPDIN GPIO_NUM_4  // Check BSPD OK signal from BSPD directly 
-#define IMDIN GPIO_NUM_5   // Check IMD OK signal from IMD directly
-#define SDCIN GPIO_NUM_9    // Check OK signal from Shutdown Circuit => Its status must match all below Signal pin , otherwise faulty
-#define OBCIN GPIO_NUM_10   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
-
-#define BMSOUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
-// #define BMSOUT LED_BUILTIN - SOC_GPIO_PIN_COUNT
-// #define BMSOUT LED_BUILTIN  // OUTPUT Fault Signal to BMS relay
+// ADC pin
+#define APS1 GPIO_NUM_4
+#define APS2 GPIO_NUM_5
+#define BPS1 GPIO_NUM_6
+#define BPS2 GPIO_NUM_7
+#define CURR GPIO_NUM_8
+// Digital input
+#define BSPDIN GPIO_NUM_15  // Check BSPD OK signal from BSPD directly 
+#define IMDIN GPIO_NUM_16   // Check IMD OK signal from IMD directly
+#define SDCIN GPIO_NUM_17    // Check OK signal from Shutdown Circuit => Its status must match all below Signal pin , otherwise faulty
+#define EMR_O GPIO_NUM_18
+#define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
+// Digital Output 
+#define AMS_OUT GPIO_NUM_21  // OUTPUT Fault Signal to BMS relay
+#define TEMPlight GPIO_NUM_47
 #define LVlight GPIO_NUM_48
-#define TEMPlight GPIO_NUM_46
-
-#define EEPROM_SIZE 5
+// Macros
 #define OBC_SYNC_TIME 500
 #define SYNC_TIME 200
 #define TIMEOUT_TIME 4000
 #define BMU_NUM 8
-#define OBC_ADD 0x1806E5F4
 #define BCU_ADD 0x01EE5000
-
+#define OBC_ADD 0x1806E5F4
 /**************** Setup Variables *******************/
 twai_message_t sendMessage;
 twai_message_t receivedMessage;
 
-// Software Timer reference
+// Software Timer
 unsigned long reference_time = 0; 
 unsigned long reference_time2 = 0;
 unsigned long reference_time3 = 0;
 unsigned long communication_timer1 = 0;
 unsigned long shutdown_timer1 = 0;
 unsigned long lastModuleResponse[BMU_NUM] = {0};
-// Ticker , Timer interrupt
+// Hardware Timer
 hw_timer_t *My_timer1 = NULL;
 hw_timer_t *My_timer2 = NULL;
 
-// BMU data , Accumulator data structure , process in CORE1
+// BMU data , Accumulator data structure, Sensing data.
 BMUdata BMU_Package[BMU_NUM];
 AMSdata AMS_Package;
-// Logic Shifting data , process in CORE0
-SDCsignal SDC_Signal_Board;
+LVsignal SDC_Signal_Board;
 OBCdata OBC_Package;
 
-// Alias name
+// Alias names
 bool &AMS_OK = AMS_Package.AMS_OK;
 uint8_t &OBCFault = OBC_Package.OBCstatusbit;
 bool &ACCUM_Full = AMS_Package.OVERVOLT_WARNING;
 float &ACCUM_MAXVOLTAGE = AMS_Package.ACCUM_MAXVOLTAGE; 
-float &ACCUM_MINVOLTAGE = AMS_Package.ACCUM_MINVOLTAGE; 
-bool &AIRplus = SDC_Signal_Board.AIRplus; 
-bool &IMD_Relay = SDC_Signal_Board.IMD_Relay; 
-bool &BSPD_Relay = SDC_Signal_Board.BSPD_Relay; 
+float &ACCUM_MINVOLTAGE = AMS_Package.ACCUM_MINVOLTAGE;  
 
-// Flag
-const bool EEPROM_WRITE_FLAG = false;
+// Flags
 volatile bool CAN_SEND_FLG1 = false;
 volatile bool CAN_SEND_FLG2 = false;
 bool CHARGER_PLUGGED = false;
@@ -90,10 +90,20 @@ bool ACCUM_OverDivCritical = 0;
 bool LOW_VOLT_WARN = 0;
 bool OVER_TEMP_WARN = 0;
 
+// Default Parameter preparing for BMU to save in its non-volatile memory.
+const byte Sync = SYNC_TIME; 
+const byte VmaxCell = (byte) (VMAX_CELL / 0.1) ;
+const byte VminCell = (byte) (VMIN_CELL / 0.1) ;
+const byte TempMaxCell = (TEMP_MAX_CELL);
+const byte dVmax = (DVMAX / 0.1); 
+const bool BMUUpdateEEPROM = 1; // Flag for BMU to update its EEPROM
 
-
-// Default Parameter
-byte  VmaxCell ,VminCell ,TempMaxCell ,dVmax;
+// Task handler
+TaskHandle_t Task1, Task2, Task3, Task4;
+// Task 0 Handle SDC relay [prio]
+// Task 1 send (use two global flag)
+// Task 2 received ()
+// Task 3 get AMSout
 
 /**************** Local Function Delcaration *******************/
 void packBMUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged);
@@ -108,11 +118,13 @@ void debugFrame();
 void checkModuleTimeout();
 void twaiTroubleshoot();
 void resetAllStruct();
+void resetModuleData(int moduleIndex);
+void sensorReading();
 
 /*******************************************************************
   ==============================Setup==============================
 ********************************************************************/
-void resetModuleData(int moduleIndex);
+
 void IRAM_ATTR onTimer1() {
   CAN_SEND_FLG1 = 1;
 }
@@ -121,6 +133,7 @@ void IRAM_ATTR onTimer2() {
 }
 
 void setup() {
+
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   Serial.begin(115200);
   /* Shutdown System setup */
@@ -128,38 +141,18 @@ void setup() {
   pinMode(OBCIN,INPUT_PULLDOWN);
   pinMode(IMDIN,INPUT_PULLDOWN);
   pinMode(BSPDIN,INPUT_PULLDOWN);
-  pinMode(BMSOUT,OUTPUT);
+  pinMode(EMR_O,INPUT_PULLDOWN);
+  pinMode(AMS_OUT,OUTPUT);
   pinMode(LVlight,OUTPUT);
   pinMode(TEMPlight,OUTPUT);
-  
-  /* Write Default Parameter to ESP32 Flashmemory only once*/
-    EEPROM.begin(EEPROM_SIZE); // only for esp32 , that use virtual eeprom
-    if (EEPROM_WRITE_FLAG) {
-      Serial.println("write to EEPROM.");
-      EEPROM.write(0, (byte) (VMAX_CELL / 0.1) ); // 42
-      EEPROM.write(1, (byte) (VMIN_CELL / 0.1) ); // 32
-      EEPROM.write(2, (byte) (TEMP_MAX_CELL) ); // 60
-      EEPROM.write(3, (byte) (DVMAX / 0.1) ); // 2
-      EEPROM.commit();
-      Serial.println("Writing to EEPROM. complete");
-    }
-    // Display and Check EEPROM Data
-    Serial.println("EEPROM Data:");
-    EEPROM.get(0,VmaxCell); Serial.println(VmaxCell);
-    EEPROM.get(1,VminCell); Serial.println(VminCell);
-    EEPROM.get(2,TempMaxCell); Serial.println(TempMaxCell);
-    EEPROM.get(3,dVmax); Serial.println(dVmax);
       
   /* CAN Communication Setup */
   sendMessage.extd = true;
   twai_general_config_t general_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX, CAN_RX, TWAI_MODE_NORMAL);
   general_config.tx_queue_len = 800; // worstcase is 152 bit/frame , this should hold about 5 frame
   general_config.rx_queue_len = 1300; // RX queue hold about 8 frame
-
-  twai_timing_config_t timing_config = TWAI_TIMING_CONFIG_250KBITS();
-  // Set Filter (Default now us accept all , but I will reconfigure it later)
-  twai_filter_config_t filter_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-
+  twai_timing_config_t timing_config = TWAI_TIMING_CONFIG_500KBITS();
+  twai_filter_config_t filter_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(); // May config this later
   // Install the TWAI driver
   if (twai_driver_install(&general_config, &timing_config, &filter_config) == !ESP_OK) {
     Serial.println("TWAI Driver install failed__");
@@ -176,7 +169,7 @@ void setup() {
       }
     }
 
-  // Setup timer for 100ms intervals
+  // Hardware periodic timer 100ms & 500ms
   unsigned int time1 = (SYNC_TIME/2) * 1000 ;
   My_timer1 =  timerBegin(0, 80, true);  // Timer with prescaler
   timerAttachInterrupt(My_timer1, &onTimer1, true);
@@ -190,7 +183,20 @@ void setup() {
   timerAlarmWrite(My_timer2, time2, true);  // 500ms interval
   timerAlarmEnable(My_timer2);
 
-  Serial.println("BCU__initialized__");
+  Serial.println("BCU__initialized__");    
+
+  // FreeRTOS tasks core 0 USB or Uart serial (Disable BackGround task like WiFi BLe , to make core 0 faster)
+
+  /* CORE0 for coordinating BMS and Electrical System*/
+
+  /*-------------- BMSROS_Package debug with SD card logger -------------*/
+  // Packing data to SD
+  // packing data to Remote System using CORE0
+  /*-------------- CORE 0 Tasks -------------*/
+  // ROS , Ethernet publishy function
+
+  /*-------------- CORE 1 Tasks -------------*/
+
 }
 
 /*******************************************************************
@@ -203,19 +209,19 @@ void loop(){
 /* CORE0 for coordinating with Telemetry socket CAN*/
   // Check if Charger LV AUX plug is actually into ACCUM 2nd Floor connector (May change to external interrupt)
   (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
-  /*___Task 0 : Communication ====================================================*/
+  /*___Task 1 : Communication ====================================================*/
   // ------------------------------------Message Transmission
   
   // BCU CMD & SYNC   (100ms cycle Broadcast to all BMU modules in Bus) 
   if (CAN_SEND_FLG1)
   {
-    CAN_SEND_FLG1=0; // reset
+    CAN_SEND_FLG1 = 0; // reset
     packBMUmsg(&sendMessage, SYNC_TIME , CHARGER_PLUGGED);
     twai_transmit(&sendMessage, 1);
   } 
   if(CAN_SEND_FLG2 && CHARGER_PLUGGED)
   {
-    CAN_SEND_FLG2=0; // reset
+    CAN_SEND_FLG2 = 0; // reset
     packOBCmsg(&sendMessage, AMS_OK, ACCUM_ReadytoCharge , ACCUM_OverDivCritical , ACCUM_Full);
     // **NOTE** 3rd to 5th Parameter will be updated via unpackBMUmsgtoAMS(); function
     twai_transmit(&sendMessage, 1);
@@ -226,18 +232,14 @@ void loop(){
   // if RX buffer isn't cleared after its full within 1 tick Queue overflow alert will fired
   if (twai_receive(&receivedMessage, 1) == ESP_OK) 
   {
-    // debugFrame();
     // Reset every BMU struct that has been disconnected from CAN Bus
     checkModuleTimeout();
+    // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package:
+    unpackBMUmsgtoAMS(&receivedMessage, BMU_Package); // 200ms cycle & 500ms cycle of faultcode
 
-    // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package: 
-    // ----Driving
-    unpackBMUmsgtoAMS(&receivedMessage, BMU_Package); // 200ms cycle & 1000ms cycle of faultcode
-    // ----Charging
     if(CHARGER_PLUGGED)
-    // Unpack CAN frame and insert to OBC_Package: 
-      unpackOBCmsg(&receivedMessage); // 500ms cycle
-    
+      unpackOBCmsg(&receivedMessage); // Unpack CAN frame and insert to OBC_Package:  500ms cycle 
+      
     // Update timeout flag and communication_timer
     CAN_TIMEOUT_FLG = false;
     communication_timer1 = millis();
@@ -245,20 +247,20 @@ void loop(){
 
   // if no byte received from CAN bus , run this code and return until the bus is active
   else if (millis()-communication_timer1 >= TIMEOUT_TIME){
-    digitalWrite(BMSOUT,LOW);
+    digitalWrite(AMS_OUT,LOW);
     if( millis()-shutdown_timer1 >= 400 ){
         Serial.println("NO_BYTE_RECV");
         shutdown_timer1 = millis();
     }
     // resetAllStruct() only once
-    if(CAN_TIMEOUT_FLG == false)
+    if(!CAN_TIMEOUT_FLG)
       resetAllStruct();
     // Mark flag true to bypass resetAllstruct() afterward.
     CAN_TIMEOUT_FLG = true;
     return;
   }
     
-  /*___Task 1 : Determine AMS_OK relay state ==================================================== */
+  /*___Task 2 : Determine AMS_OK relay state ==================================================== */
 
     // Fault Table , OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
 
@@ -270,76 +272,58 @@ void loop(){
     // Fault Condition for AMS_OK Shutdown
     bool ACCUMULATOR_Fault;
     ACCUMULATOR_Fault = AMS_Package.OVERVOLT_CRITICAL | AMS_Package.LOWVOLT_CRITICAL | AMS_Package.OVERTEMP_CRITICAL;
-
     (ACCUMULATOR_Fault > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
     
     /*------- Coordiante BMU cell Balancing with OBC ------------*/
-    if(CHARGER_PLUGGED){
+    if(CHARGER_PLUGGED)
+    {
       // if differential voltage between any cells are critical, then at AMS level is fault
       (AMS_Package.OVERDIV_CRITICAL > 0) ? (ACCUM_OverDivCritical = 1) : (ACCUM_OverDivCritical = 0);
       // Set ReadytoCharge Flag, only if All BMU are ready to charge.
       (AMS_Package.ACCUM_CHG_READY > 0) ? (ACCUM_ReadytoCharge = 1) : (ACCUM_ReadytoCharge = 0);
-
       ((ACCUMULATOR_Fault | OBCFault) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
-      // Debug BMU_Package[0] , Passive Balancing Cells
-        // Serial.println(BMS_ROSPackage[0].BalancingDischarge_Cells,BIN); 
+      
     }
+
+     
+  /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
+
+    (AMS_OK) ? digitalWrite(AMS_OUT,HIGH) : digitalWrite(AMS_OUT,LOW);
+    (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
+    (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
+    sensorReading();
+
 
     // Debug AMS state
-    if(millis()-reference_time >= 200){
-      Serial.printf("AMS_OK: %c \n",AMS_OK);
-      Serial.printf("AMS_VOLT: %x \n",AMS_Package.ACCUM_VOLTAGE);
+    if(millis()-reference_time >= 200) {
+      Serial.printf("AMS_OK: %d \n", AMS_OK);
+      Serial.printf("AMS_VOLT: %2f \n", AMS_Package.ACCUM_VOLTAGE);
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
+      // Serial.println(BMU_Package[0].BalancingDischarge_Cells,BIN); 
+
+
+      // Serial.printf("AIRplus: %c \n", SDC_Signal_Board.AIRplus);
+      // Serial.printf("IMD_Relay: %c \n", SDC_Signal_Board.IMD_Relay);
+      // Serial.printf("BSPD_Relay: %c \n", SDC_Signal_Board.BSPD_Relay);
+      // Serial.printf("Emergency Button: %c \n", SDC_Signal_Board.BSPD_Relay);
+
+      // Serial.printf("BrakePressure1: %2f \n", SDC_Signal_Board.BrakePressure1);
+      // Serial.printf("BrakePressure2: %2f \n", SDC_Signal_Board.BrakePressure2);
+      // Serial.printf("AccelPedal1: %2f \n", SDC_Signal_Board.AccelPedal1);
+      // Serial.printf("AccelPedal2: %2f \n", SDC_Signal_Board.AccelPedal2);
+      // Serial.printf("Current_Sense: %2f \n", SDC_Signal_Board.CurrentSense);
+
       reference_time= millis();
     }
-     
-  /* Task 1 : Shutdown , Dash Board interaction ==================================================== */ 
-   
-    if(!AMS_OK){
-      digitalWrite(BMSOUT,LOW);
-    } else {
-      digitalWrite(BMSOUT,HIGH);
-    }
-
-    if(LOW_VOLT_WARN){ 
-      digitalWrite(LVlight,HIGH);
-    } 
-    else {
-      digitalWrite(LVlight,LOW);
-    }
-      
-    if(OVER_TEMP_WARN){ 
-      digitalWrite(TEMPlight,HIGH);
-    } 
-    else {
-      digitalWrite(TEMPlight,LOW);
-    }
-    
-/* CORE1 for coordinating BMS and Electrical System*/
-
-  /*-------------- BMSROS_Package debug with SD card logger -------------*/
-  // Packing data to SD
-  // packing data to Remote System using CORE0
-  /*-------------- CORE 0 Tasks -------------*/
-  // ROS , Ethernet publishy function
-
-  /*-------------- CORE 1 Tasks -------------*/
-  // After publishing to ROS , reset all BMU data with for loop
-
-  // Read SDC output signal to AIR+
-  (digitalRead(SDCIN)) ? (AIRplus = 1) : (AIRplus = 0);
-  // Read IMD_Ok and BSPD_OK status from SDC
-  (digitalRead(IMDIN)) ? (IMD_Relay = 1) : (IMD_Relay = 0);
-  (digitalRead(BSPDIN)) ? (BSPD_Relay = 1) : (BSPD_Relay = 0);
-
 } 
 
 /* ==================================Main Local Functions==============================*/
-// declare subfunction for main use
+// Decalre Subfunction
   bool isModuleActive(int moduleIndex);
   void resetModuleData(int moduleIndex);
   void recalculateAMSPackage (int moduleIndex);
+
 void packBMUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged) {
 
   BCUsent->identifier  = BCU_ADD; // BCU ID
@@ -353,9 +337,8 @@ void packBMUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger
   BCUsent->data[3] = VminCell; 
   BCUsent->data[4] = TempMaxCell; 
   BCUsent->data[5] = dVmax;
-  BCUsent->data[6] = 0x00; // Reserved
-  BCUsent->data[7] = 0x00;
-    
+  BCUsent->data[6] = BMUUpdateEEPROM; 
+  BCUsent->data[7] = 0x00; // Reserved
 }
 void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   
@@ -433,7 +416,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   // Pack BMUframe to AMSframe according to the following condition
   for(int j = 0; j <BMU_NUM ; j++)
   {
-    // if Module is connected to CANbus, set , and recalculateAMS
+    // if Module is connected to CANbus, set as connect, and recalculateAMS package a new
     if(isModuleActive(j)){ 
         BMU_Package[j].BMUconnected = 1;
         recalculateAMSPackage(j);
@@ -530,7 +513,7 @@ void resetAllStruct(){
     lastModuleResponse[i] = 0;
   }
   AMS_Package = AMSdata();
-  SDC_Signal_Board = SDCsignal();
+  SDC_Signal_Board = LVsignal();
   OBC_Package = OBCdata();
 }
 void checkModuleTimeout(){
@@ -538,6 +521,21 @@ for(short i =0; i<BMU_NUM ; i++){
     if(BMU_Package[i].BMUconnected == 0)
       resetModuleData(i);
   }
+}
+
+void sensorReading(){
+  // Read SDC output signal to AIR+
+  SDC_Signal_Board.AIRplus = digitalRead(SDCIN);
+  SDC_Signal_Board.IMD_Relay = digitalRead(IMDIN);
+  SDC_Signal_Board.BSPD_Relay = digitalRead(BSPDIN);
+  SDC_Signal_Board.EMERGENCY_BUTTON = digitalRead(EMR_O);
+
+  SDC_Signal_Board.BrakePressure1 = analogRead(BPS1) * 3.3/4095;
+  SDC_Signal_Board.BrakePressure2 = analogRead(BPS2) * 3.3/4095;
+  SDC_Signal_Board.AccelPedal1 = analogRead(APS1)* 3.3/4095;
+  SDC_Signal_Board.AccelPedal2 = analogRead(APS2)* 3.3/4095;
+  SDC_Signal_Board.CurrentSense = analogRead(CURR)* 3.3/4095;  
+
 }
 /* ==================================Serial Debugger==============================*/
 // Use Non-Block string , there's literally no perfect way to Serial Debug asynchronusly
@@ -551,18 +549,18 @@ void debugBMUmsg(int Module){
 
     Serial.print("BMU Operation Status: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
     Serial.print("Cell balancing discharge: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells);
-    Serial.print("V_CELL C1-10: ");
+    Serial.print("V_CELL[10]: ");
     // can change to vector , for easy looping funcion
     for(short i=0; i< CELL_NUM; i++){
       Serial.print(BMU_Package[Module].V_CELL[i]); Serial.print("V.  ");
     } Serial.println();
+    
     Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE); Serial.println("V.  ");
-    Serial.print("AVG_CELL_VOLTAGE_DIFF: ") ; Serial.print(BMU_Package[Module].DV); Serial.println("V.  ");
+    Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV); Serial.println("V.  ");
 
-    Serial.print("TEMP_SENSOR T1-T2: ");
-    for(short i=0; i< TEMP_SENSOR_NUM; i++){
-      Serial.print(BMU_Package[Module].TEMP_SENSE[i]); Serial.print("C.  ");
-    } Serial.println();
+    Serial.print("TEMP[2]: ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[0]); Serial.println("C.  ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[1]); Serial.println("C.  ");
 
     Serial.println();
 
@@ -625,19 +623,4 @@ void debugOBCmsg(){
         Serial.println("OBC Detect COMMUNICATION Time out: (6s)");
         break;
     } 
-}
-void debugSDC(){
-  
-  // Signal = 1 means at fault
-  if(CAN_TIMEOUT_FLG)
-    Serial.println();
-
-  // Signal = 0 means at fault
-  if(!SDC_Signal_Board.AIRplus)
-    Serial.println("SDC_OK_SiGNAL: OFF");
-  if(!SDC_Signal_Board.IMD_Relay)
-    Serial.println("IMD_OK = 0");
-  if(!SDC_Signal_Board.BSPD_Relay)
-    Serial.println("BSPD_OK = 0");
-  
 }
