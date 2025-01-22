@@ -42,18 +42,19 @@ RTOS and Push ROS topics
 #define EMR_O GPIO_NUM_18
 #define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
 // Digital Output 
-#define AMS_OUT GPIO_NUM_21  // OUTPUT Fault Signal to BMS relay
-#define TEMPlight GPIO_NUM_47
+#define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
+#define TEMPlight GPIO_NUM_21
 #define LVlight GPIO_NUM_48
 // Macros
 #define OBC_SYNC_TIME 500
 #define SYNC_TIME 200
-#define TIMEOUT_TIME 4000
+#define TIMEOUT_TIME 2000
 #define BMU_NUM 8
-#define BCU_ADD 0x01EE5000
+#define BCU_ADD 0x7FF
 #define OBC_ADD 0x1806E5F4
 /**************** Setup Variables *******************/
 twai_message_t sendMessage;
+twai_message_t J1939msg;
 twai_message_t receivedMessage;
 
 // Software Timer
@@ -96,7 +97,7 @@ const byte VmaxCell = (byte) (VMAX_CELL / 0.1) ;
 const byte VminCell = (byte) (VMIN_CELL / 0.1) ;
 const byte TempMaxCell = (TEMP_MAX_CELL);
 const byte dVmax = (DVMAX / 0.1); 
-const bool BMUUpdateEEPROM = 1; // Flag for BMU to update its EEPROM
+const bool BMUUpdateEEPROM = 0; // Flag for BMU to update its EEPROM
 
 // Task handler
 TaskHandle_t Task1, Task2, Task3, Task4;
@@ -113,9 +114,8 @@ void unpackBMUmsgtoAMS ( twai_message_t *BCUreceived, BMUdata *BMS_ROSPackage);
 void debugBMUmsg(int Module);
 void debugBMUFault(int Module);
 void debugOBCmsg();
-void debugSDC();
 void debugFrame();
-void checkModuleTimeout();
+void dynamicAdjustModule();
 void twaiTroubleshoot();
 void resetAllStruct();
 void resetModuleData(int moduleIndex);
@@ -145,9 +145,13 @@ void setup() {
   pinMode(AMS_OUT,OUTPUT);
   pinMode(LVlight,OUTPUT);
   pinMode(TEMPlight,OUTPUT);
+  // ADC
+  // punMode(BPS1,INPUT);
       
   /* CAN Communication Setup */
-  sendMessage.extd = true;
+  sendMessage.extd = false;
+  receivedMessage.extd = false;
+  J1939msg.extd = true;
   twai_general_config_t general_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX, CAN_RX, TWAI_MODE_NORMAL);
   general_config.tx_queue_len = 800; // worstcase is 152 bit/frame , this should hold about 5 frame
   general_config.rx_queue_len = 1300; // RX queue hold about 8 frame
@@ -170,20 +174,18 @@ void setup() {
     }
 
   // Hardware periodic timer 100ms & 500ms
-  unsigned int time1 = (SYNC_TIME/2) * 1000 ;
   My_timer1 =  timerBegin(0, 80, true);  // Timer with prescaler
   timerAttachInterrupt(My_timer1, &onTimer1, true);
-  timerAlarmWrite(My_timer1, time1, true);  // 100ms interval
+  timerAlarmWrite(My_timer1, (SYNC_TIME/2) * 1000, true);  // 100ms interval
   timerAlarmEnable(My_timer1);
 
   // Setup timer for 500ms intervals 
-  unsigned int time2 = (OBC_SYNC_TIME)*1000 ;
   My_timer2 = timerBegin(1, 80, true);
   timerAttachInterrupt(My_timer2, &onTimer2, true);
-  timerAlarmWrite(My_timer2, time2, true);  // 500ms interval
+  timerAlarmWrite(My_timer2, (OBC_SYNC_TIME)*1000, true);  // 500ms interval
   timerAlarmEnable(My_timer2);
 
-  Serial.println("BCU__initialized__");    
+   
 
   // FreeRTOS tasks core 0 USB or Uart serial (Disable BackGround task like WiFi BLe , to make core 0 faster)
 
@@ -196,6 +198,7 @@ void setup() {
   // ROS , Ethernet publishy function
 
   /*-------------- CORE 1 Tasks -------------*/
+    Serial.println("BCU__initialized__"); 
 
 }
 
@@ -206,7 +209,6 @@ void setup() {
 /* CORE1 for coordinating BMS and Electrical System*/
   
 void loop(){
-/* CORE0 for coordinating with Telemetry socket CAN*/
   // Check if Charger LV AUX plug is actually into ACCUM 2nd Floor connector (May change to external interrupt)
   (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
   /*___Task 1 : Communication ====================================================*/
@@ -232,8 +234,12 @@ void loop(){
   // if RX buffer isn't cleared after its full within 1 tick Queue overflow alert will fired
   if (twai_receive(&receivedMessage, 1) == ESP_OK) 
   {
-    // Reset every BMU struct that has been disconnected from CAN Bus
-    checkModuleTimeout();
+    // debugFrame();
+    // Reset BMU data for the one that has disconnected from CAN Bus
+    // Readjust MIN MAX VOLTAGE of AMS by counting the left overactiveModule
+    dynamicAdjustModule();
+    // Serial.printf("MAXVOLT: %d \n",AMS_Package.ACCUM_MAXVOLTAGE);
+    // Serial.printf("MINVOLT: %d \n",AMS_Package.ACCUM_MINVOLTAGE);
     // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package:
     unpackBMUmsgtoAMS(&receivedMessage, BMU_Package); // 200ms cycle & 500ms cycle of faultcode
 
@@ -263,7 +269,6 @@ void loop(){
   /*___Task 2 : Determine AMS_OK relay state ==================================================== */
 
     // Fault Table , OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
-
     // Warning Condition for Dashboard light: LowVoltage , Module OverTemperature , Full Voltage
     (AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE) ? (ACCUM_Full = 1) : (ACCUM_Full = 0) ;
     (AMS_Package.ACCUM_VOLTAGE <= 1.12 * ACCUM_MINVOLTAGE) ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
@@ -284,25 +289,21 @@ void loop(){
       ((ACCUMULATOR_Fault | OBCFault) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
       
     }
-
      
   /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
-
+ 
     (AMS_OK) ? digitalWrite(AMS_OUT,HIGH) : digitalWrite(AMS_OUT,LOW);
     (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
     (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
     sensorReading();
 
-
     // Debug AMS state
     if(millis()-reference_time >= 200) {
       Serial.printf("AMS_OK: %d \n", AMS_OK);
-      Serial.printf("AMS_VOLT: %2f \n", AMS_Package.ACCUM_VOLTAGE);
+      Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
-      // Serial.println(BMU_Package[0].BalancingDischarge_Cells,BIN); 
-
-
+      
       // Serial.printf("AIRplus: %c \n", SDC_Signal_Board.AIRplus);
       // Serial.printf("IMD_Relay: %c \n", SDC_Signal_Board.IMD_Relay);
       // Serial.printf("BSPD_Relay: %c \n", SDC_Signal_Board.BSPD_Relay);
@@ -314,8 +315,15 @@ void loop(){
       // Serial.printf("AccelPedal2: %2f \n", SDC_Signal_Board.AccelPedal2);
       // Serial.printf("Current_Sense: %2f \n", SDC_Signal_Board.CurrentSense);
 
+      // 2nd one is connected to dummy test kit
+      debugBMUmsg(1);
+      // debugBMUFault(1);
+
+      // twaiTroubleshoot();
       reference_time= millis();
     }
+
+    
 } 
 
 /* ==================================Main Local Functions==============================*/
@@ -342,11 +350,14 @@ void packBMUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger
 }
 void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   
+  
+  StandardCANIDDecoded decodedCANID;
+  decodeStandardCANID(&decodedCANID, (BCUreceived->identifier) );
   // Decode logic
-  CANIDDecoded decodedCANID;
-  decodeExtendedCANID(&decodedCANID, (BCUreceived->identifier));
-  if(decodedCANID.BASE_ID != 0x0E || decodedCANID.DEST != 0xE5)
-    return;
+  // CANIDDecoded decodedCANID;
+  // decodeExtendedCANID(&decodedCANID, (BCUreceived->identifier));
+  // if(decodedCANID.BASE_ID != 0x0E || decodedCANID.DEST != 0xE5)
+  //   return;
   
   // Distingush Module ID
     int i = decodedCANID.SRC - 1; // SRC stats at 0x01, subtract 1 for indexing.
@@ -358,7 +369,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   
   // unpack ReceiveFrame to BMUframe
   /*  Message Priority 11 :: BMUModule & Cells data  */
-  if(decodedCANID.PRIORITY == 0x11)
+  if(decodedCANID.PRIORITY == 0x02)
   {
     switch (decodedCANID.MSG_NUM) 
     { 
@@ -390,7 +401,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
     }
   }
   /*  Message Priority 10 :: FaultCode  */
-  else if(decodedCANID.PRIORITY == 0x10)
+  else if(decodedCANID.PRIORITY == 0x01)
   {
     switch (decodedCANID.MSG_NUM)
     {
@@ -484,6 +495,7 @@ void twaiTroubleshoot(){
   Serial.println(alerts_triggered);
   
 }
+
 bool isModuleActive(int moduleIndex) {
   unsigned int MAX_SILENCE = (SYNC_TIME) + 350;
   return (millis() - lastModuleResponse[moduleIndex]) <= (MAX_SILENCE);
@@ -494,7 +506,7 @@ void resetModuleData(int moduleIndex){
 }
 void recalculateAMSPackage (int moduleIndex) {
   int &i = moduleIndex;
-  // Recalculate based on current BMU states
+  // Recalculate AMS based on current BMU states
   AMS_Package.ACCUM_VOLTAGE += (BMU_Package[i].V_MODULE) * 0.2;
   AMS_Package.OVERVOLT_WARNING |= BMU_Package[i].OVERVOLTAGE_WARNING;
   AMS_Package.LOWVOLT_WARNING |= BMU_Package[i].LOWVOLTAGE_WARNING;
@@ -506,6 +518,8 @@ void recalculateAMSPackage (int moduleIndex) {
 
   AMS_Package.ACCUM_CHG_READY &= (BMU_Package[i].BMUreadytoCharge);
   AMS_Package.OVERDIV_CRITICAL |= BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL;
+  
+  // Available Module , and 
 }
 void resetAllStruct(){
   for (int i = 0; i < BMU_NUM; i++){
@@ -516,11 +530,28 @@ void resetAllStruct(){
   SDC_Signal_Board = LVsignal();
   OBC_Package = OBCdata();
 }
-void checkModuleTimeout(){
-for(short i =0; i<BMU_NUM ; i++){
-    if(BMU_Package[i].BMUconnected == 0)
-      resetModuleData(i);
-  }
+void dynamicAdjustModule(){
+
+  // Critical Sectiob, no interrupt
+  // noInterrupts();
+  
+  // static byte activeModule = 0;
+  for(short i =0; i< BMU_NUM ; i++){
+      
+      if(BMU_Package[i].BMUconnected == 0){
+        resetModuleData(i);
+      } 
+    //   // Count for module that are connected
+    //   else if (BMU_Package[i].BMUconnected == 1) {
+    //     activeModule++;
+    //   }
+    }
+    //     // Dynamically Adjust ACCUM_MINVOlTAGE
+    //   AMS_Package.ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * activeModule;
+    //   AMS_Package.ACCUM_MAXVOLTAGE = VMIN_CELL * CELL_NUM * activeModule;
+    //   activeModule = 0;
+    // interrupts();
+  
 }
 
 void sensorReading(){
@@ -547,43 +578,43 @@ void debugFrame(){
 }
 void debugBMUmsg(int Module){
 
-    Serial.print("BMU Operation Status: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
-    Serial.print("Cell balancing discharge: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells);
+    Serial.print("BMU_CHGready: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
+    Serial.print("V_Disch: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells,BIN);
     Serial.print("V_CELL[10]: ");
     // can change to vector , for easy looping funcion
     for(short i=0; i< CELL_NUM; i++){
-      Serial.print(BMU_Package[Module].V_CELL[i]); Serial.print("V.  ");
+      Serial.print(BMU_Package[Module].V_CELL[i] * 0.02); Serial.print("V.  ");
     } Serial.println();
     
-    Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE); Serial.println("V.  ");
-    Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV); Serial.println("V.  ");
+    Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE *0.2); Serial.println("V.  ");
+    Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV * 0.1); Serial.println("V.  ");
 
     Serial.print("TEMP[2]: ");
-      Serial.print(BMU_Package[Module].TEMP_SENSE[0]); Serial.println("C.  ");
-      Serial.print(BMU_Package[Module].TEMP_SENSE[1]); Serial.println("C.  ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[0]*0.6 + 2); Serial.println("C.  ");
+      Serial.print(BMU_Package[Module].TEMP_SENSE[1]*0.6 + 2); Serial.println("C.  ");
 
     Serial.println();
 
 }
 void debugBMUFault(int Module){
   
-    Serial.print("OVERVOLTAGE_CRITICAL_CELLS (C1-C10): ");
+    Serial.print("OV_CRI: ");
     Serial.println(BMU_Package[Module].OVERVOLTAGE_CRITICAL,HEX);
-    Serial.print("UNDERVOLTAGE_CRITICAL_CELLS (C1-C10): ");
+    Serial.print("LV_CRI: ");
     Serial.println(BMU_Package[Module].LOWVOLTAGE_CRITICAL,HEX);
-    Serial.print("OVERTEMP_CRITICAL (C1-C10): ");
+    Serial.print("OVT_CRI: ");
     Serial.println(BMU_Package[Module].OVERTEMP_CRITICAL, HEX);
-    Serial.print("OVERDIV_CRITICAL (C1-C10): ");
+    Serial.print("OVDIV_CRI: ");
     Serial.println(BMU_Package[Module].OVERDIV_VOLTAGE_CRITICAL,HEX);
     Serial.println();
   
-    Serial.print("OVERVOLTAGE_WARNING_CELLS (C1-C10): ");
+    Serial.print("OV_W: ");
     Serial.println(BMU_Package[Module].OVERVOLTAGE_WARNING,HEX);
-    Serial.print("UNDERVOLTAGE_WARNING_CELLS (C1-C10): ");
+    Serial.print("LV_W: ");
     Serial.println(BMU_Package[Module].LOWVOLTAGE_WARNING,HEX);
-    Serial.print("OVERTEMP_WARNING (C1-C10): ");
+    Serial.print("OVT_W: ");
     Serial.println(BMU_Package[Module].OVERTEMP_WARNING, HEX);
-    Serial.print("OVERDIV_WARNING (C1-C10): ");
+    Serial.print("OVDIV_CRI: ");
     Serial.println(BMU_Package[Module].OVERDIV_VOLTAGE_WARNING,HEX);
     Serial.println();  
     

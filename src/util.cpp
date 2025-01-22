@@ -93,18 +93,6 @@ uint16_t toUint16FromBitarrayLSB(const bool *bitarr) {
 // 1 CE 1 0A 00
 // 0001 1100 1110 0001 0000 1010 0000 0000
 
-// Create Extended CAN ID of Priority , BaseID , msg Number , src , dest 
-uint32_t createExtendedCANID(uint8_t PRIORITY, uint8_t BASE_ID,uint8_t SRC_ADDRESS, uint8_t DEST_ADDRESS, uint8_t MSG_NUM ) {
-    uint32_t canID = 0;
-
-    canID |= (PRIORITY & 0xFF) << 24;        // (PP)Priority (bits 24-29)
-    canID |= (BASE_ID & 0x0F) << 20;         // (B) Base id denotes CAN channel (bit 20-24)
-    canID |= (SRC_ADDRESS & 0xFF) << 12;     // (SS)Source BMU address (bits 9-16)
-    canID |= (DEST_ADDRESS & 0xFF) << 4;     // (DD)Destination BCU address (bits 8-15)
-    canID |= MSG_NUM;                        // (X) Message number (bits 0-7)
-    return canID;
-}
-
 // Decode extended CAN ID
 void decodeExtendedCANID(struct CANIDDecoded *myCAN ,uint32_t canID) {
 
@@ -116,6 +104,11 @@ void decodeExtendedCANID(struct CANIDDecoded *myCAN ,uint32_t canID) {
     
 }
 
+void decodeStandardCANID(struct StandardCANIDDecoded *myCAN, uint32_t canID) {
+    myCAN->PRIORITY = (canID >> 8) & 0x0F;        // Extract priority (bits 24-29)
+    myCAN->SRC = (canID >> 4) & 0x0F;             // Extract destination address (bits 4-11)
+    myCAN->MSG_NUM = canID & 0x0F;                 // Extract Message Number (bits 0-3)
+}
 
 // C++ program to illustrate how to implement a circular
 // buffer using std::vector

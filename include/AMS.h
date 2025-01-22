@@ -43,9 +43,10 @@ struct BMUdata {
 struct AMSdata {
 
   float ACCUM_VOLTAGE = 0.0; 
-  float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Expected
-  float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * BMU_NUM; // Expected
-  // float ACCUM_MINVOLTAGE = 40.0; // Expected
+  // float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Default value
+  // float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * BMU_NUM; // Defualt value assum 8 module
+  float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM;
+  float ACCUM_MAXVOLTAGE = VMAX_CELL * CELL_NUM; 
   bool ACCUM_CHG_READY = 0;
 
   bool OVERVOLT_WARNING = 0;
