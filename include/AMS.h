@@ -8,7 +8,7 @@
 
 // Default configuration of AMS
 #define CELL_NUM 10
-#define BMU_NUM 8
+#define BMU_NUM 3
 /*Amita Battery*/
 #define VMAX_CELL 4.2
 #define VMIN_CELL 3.2
@@ -43,10 +43,8 @@ struct BMUdata {
 struct AMSdata {
 
   float ACCUM_VOLTAGE = 0.0; 
-  // float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Default value
-  // float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * BMU_NUM; // Defualt value assum 8 module
-  float ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM;
-  float ACCUM_MAXVOLTAGE = VMAX_CELL * CELL_NUM; 
+  float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Default value
+  float ACCUM_MINVOLTAGE = (VMIN_CELL * CELL_NUM * BMU_NUM); // Defualt value assum 8 module
   bool ACCUM_CHG_READY = 0;
 
   bool OVERVOLT_WARNING = 0;
@@ -59,7 +57,7 @@ struct AMSdata {
   bool OVERTEMP_CRITICAL = 0;
   bool OVERDIV_CRITICAL = 0;
 
-  bool AMS_OK = 1; // AMS_OUT+ ,AMS_GND
+  bool AMS_OK = 0; // AMS_OUT+ ,AMS_GND
 
 };
 

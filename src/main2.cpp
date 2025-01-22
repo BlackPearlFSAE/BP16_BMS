@@ -43,13 +43,12 @@ RTOS and Push ROS topics
 #define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
 // Digital Output 
 #define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
-#define TEMPlight GPIO_NUM_21
 #define LVlight GPIO_NUM_48
+#define TEMPlight GPIO_NUM_21
 // Macros
 #define OBC_SYNC_TIME 500
 #define SYNC_TIME 200
-#define TIMEOUT_TIME 2000
-#define BMU_NUM 8
+#define DISCONNENCTION_TIMEOUT 650
 #define BCU_ADD 0x7FF
 #define OBC_ADD 0x1806E5F4
 /**************** Setup Variables *******************/
@@ -115,11 +114,12 @@ void debugBMUmsg(int Module);
 void debugBMUFault(int Module);
 void debugOBCmsg();
 void debugFrame();
-void dynamicAdjustModule();
+bool checkModuleDisconnect();
 void twaiTroubleshoot();
 void resetAllStruct();
 void resetModuleData(int moduleIndex);
 void sensorReading();
+void dynamicModulereset();
 
 /*******************************************************************
   ==============================Setup==============================
@@ -176,13 +176,13 @@ void setup() {
   // Hardware periodic timer 100ms & 500ms
   My_timer1 =  timerBegin(0, 80, true);  // Timer with prescaler
   timerAttachInterrupt(My_timer1, &onTimer1, true);
-  timerAlarmWrite(My_timer1, (SYNC_TIME/2) * 1000, true);  // 100ms interval
+  timerAlarmWrite(My_timer1, 100 * 1000, true);  // 100ms interval
   timerAlarmEnable(My_timer1);
 
   // Setup timer for 500ms intervals 
   My_timer2 = timerBegin(1, 80, true);
   timerAttachInterrupt(My_timer2, &onTimer2, true);
-  timerAlarmWrite(My_timer2, (OBC_SYNC_TIME)*1000, true);  // 500ms interval
+  timerAlarmWrite(My_timer2, 500 * 1000, true);  // 500ms interval
   timerAlarmEnable(My_timer2);
 
    
@@ -231,15 +231,20 @@ void loop(){
  
   //------------------------------------Message Reception
 
+    
+  
+
   // if RX buffer isn't cleared after its full within 1 tick Queue overflow alert will fired
   if (twai_receive(&receivedMessage, 1) == ESP_OK) 
   {
+    // Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
+    // Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
+    // Serial.printf("BMU3 connect: %d \n",BMU_Package[2].BMUconnected);
     // debugFrame();
     // Reset BMU data for the one that has disconnected from CAN Bus
     // Readjust MIN MAX VOLTAGE of AMS by counting the left overactiveModule
-    dynamicAdjustModule();
-    // Serial.printf("MAXVOLT: %d \n",AMS_Package.ACCUM_MAXVOLTAGE);
-    // Serial.printf("MINVOLT: %d \n",AMS_Package.ACCUM_MINVOLTAGE);
+    // Reset module if not
+    dynamicModulereset();
     // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package:
     unpackBMUmsgtoAMS(&receivedMessage, BMU_Package); // 200ms cycle & 500ms cycle of faultcode
 
@@ -249,22 +254,40 @@ void loop(){
     // Update timeout flag and communication_timer
     CAN_TIMEOUT_FLG = false;
     communication_timer1 = millis();
-  } 
-
-  // if no byte received from CAN bus , run this code and return until the bus is active
-  else if (millis()-communication_timer1 >= TIMEOUT_TIME){
+  }
+  // if No module is connected from CAN bus , run this code and return until the bus is active
+  else if (millis()-communication_timer1 >= DISCONNENCTION_TIMEOUT){
+    // Shutdown
     digitalWrite(AMS_OUT,LOW);
     if( millis()-shutdown_timer1 >= 400 ){
         Serial.println("NO_BYTE_RECV");
         shutdown_timer1 = millis();
     }
     // resetAllStruct() only once
-    if(!CAN_TIMEOUT_FLG)
+    if(CAN_TIMEOUT_FLG == false)
       resetAllStruct();
     // Mark flag true to bypass resetAllstruct() afterward.
     CAN_TIMEOUT_FLG = true;
     return;
   }
+
+  // In case if any module disconnect
+  if(checkModuleDisconnect() == 0){
+    // Serial.println("DISCON");
+
+    // Shutdown immediately
+    digitalWrite(AMS_OUT,LOW);
+    if( millis()-shutdown_timer1 >= 400 ){
+        Serial.println("MODULE_DISCONNECT -- SHUTDOWN");
+        Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
+        Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
+        Serial.printf("BMU3 connect: %d \n",BMU_Package[2].BMUconnected);
+        shutdown_timer1 = millis();
+    }
+    return;
+  }
+  
+  
     
   /*___Task 2 : Determine AMS_OK relay state ==================================================== */
 
@@ -298,9 +321,11 @@ void loop(){
     sensorReading();
 
     // Debug AMS state
-    if(millis()-reference_time >= 200) {
+    if(millis()-reference_time >= 500) {
+      // Serial.printf("BMU 0 ov cri: %d \n", BMU_Package[0].OVERVOLTAGE_CRITICAL);
+      // Serial.printf("AMS ov cri: %d \n", AMS_Package.OVERVOLT_CRITICAL);
       Serial.printf("AMS_OK: %d \n", AMS_OK);
-      Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
+      // Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
       
@@ -316,7 +341,7 @@ void loop(){
       // Serial.printf("Current_Sense: %2f \n", SDC_Signal_Board.CurrentSense);
 
       // 2nd one is connected to dummy test kit
-      debugBMUmsg(1);
+      // debugBMUmsg(1);
       // debugBMUFault(1);
 
       // twaiTroubleshoot();
@@ -362,7 +387,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   // Distingush Module ID
     int i = decodedCANID.SRC - 1; // SRC stats at 0x01, subtract 1 for indexing.
     if(i >= BMU_NUM) return; // Bounds check
-
+    // Serial.println(decodedCANID.MSG_NUM);
   // Mark timestamp of successfully received Module, 
   // No update for disconnected BMU.
     lastModuleResponse[i] = millis();
@@ -420,6 +445,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
         BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL = mergeHLbyte( BCUreceived->data[6], BCUreceived->data[7] );
         break;
     }
+    // Serial.println(BMU_Package[i].OVERVOLTAGE_CRITICAL); //
   }
   
   // Reset Accumulator Parameter before dynamically recalculate based on BMU current state
@@ -497,7 +523,7 @@ void twaiTroubleshoot(){
 }
 
 bool isModuleActive(int moduleIndex) {
-  unsigned int MAX_SILENCE = (SYNC_TIME) + 350;
+  unsigned int MAX_SILENCE = DISCONNENCTION_TIMEOUT;
   return (millis() - lastModuleResponse[moduleIndex]) <= (MAX_SILENCE);
 }
 void resetModuleData(int moduleIndex){
@@ -530,28 +556,29 @@ void resetAllStruct(){
   SDC_Signal_Board = LVsignal();
   OBC_Package = OBCdata();
 }
-void dynamicAdjustModule(){
-
-  // Critical Sectiob, no interrupt
-  // noInterrupts();
-  
-  // static byte activeModule = 0;
+bool checkModuleDisconnect(){
+  // initialized as 1
+  bool disconnectedFromCAN = 1; 
   for(short i =0; i< BMU_NUM ; i++){
-      
-      if(BMU_Package[i].BMUconnected == 0){
-        resetModuleData(i);
-      } 
-    //   // Count for module that are connected
-    //   else if (BMU_Package[i].BMUconnected == 1) {
-    //     activeModule++;
-    //   }
+    // if any of the board aren't in connection => throw error
+    if(BMU_Package[i].BMUconnected == 0){
+      // resetModuleData(i); // Reset that module data (revert voltage , temp., flags , etc. Back to zero)
+      disconnectedFromCAN = 0;
     }
-    //     // Dynamically Adjust ACCUM_MINVOlTAGE
-    //   AMS_Package.ACCUM_MINVOLTAGE = VMIN_CELL * CELL_NUM * activeModule;
-    //   AMS_Package.ACCUM_MAXVOLTAGE = VMIN_CELL * CELL_NUM * activeModule;
-    //   activeModule = 0;
-    // interrupts();
-  
+      
+  }
+    // Then set shutdown
+
+    return disconnectedFromCAN;
+}
+
+void dynamicModulereset(){ 
+  for(short i =0; i< BMU_NUM ; i++){
+    // if any of the board aren't in connection => throw error
+    if(BMU_Package[i].BMUconnected == 0){
+      resetModuleData(i); // Reset that module data (revert voltage , temp., flags , etc. Back to zero)
+    }   
+  }
 }
 
 void sensorReading(){
