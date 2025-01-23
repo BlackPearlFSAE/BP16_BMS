@@ -87,11 +87,18 @@ uint16_t toUint16FromBitarrayLSB(const bool *bitarr) {
     return num;
 }
 
-
 /*------------------------------ CAN comminication Functions ----
 -----(Check the spreadsheet in README.md for CAN ID custom rules)*/
 // 1 CE 1 0A 00
 // 0001 1100 1110 0001 0000 1010 0000 0000
+
+uint16_t createCANID(uint8_t PRIORITY, uint8_t SRC_ADDRESS, uint8_t MSG_NUM) {
+    uint16_t canID = 0;
+    canID |= ((PRIORITY & 0x0F) << 8);        // (PP) Priority (bits 30–31)
+    canID |= ((SRC_ADDRESS & 0x0F) << 4);      // (SS) Source address (bits 8–15)
+    canID |= (MSG_NUM & 0x0F);            // (DD) Destination address (bits 0–7)
+    return canID;
+}
 
 // Decode extended CAN ID
 void decodeExtendedCANID(struct CANIDDecoded *myCAN ,uint32_t canID) {
@@ -109,76 +116,3 @@ void decodeStandardCANID(struct StandardCANIDDecoded *myCAN, uint32_t canID) {
     myCAN->SRC = (canID >> 4) & 0x0F;             // Extract destination address (bits 4-11)
     myCAN->MSG_NUM = canID & 0x0F;                 // Extract Message Number (bits 0-3)
 }
-
-// C++ program to illustrate how to implement a circular
-// buffer using std::vector
-// #include <stdexcept>
-// #include <vector>
-
-// class CircularBuffer {
-// private:
-//     vector<int> buffer;
-//     int head;
-//     int tail;
-//     int capacity;
-
-// public:
-//     // Constructor to intialize circular buffer's data
-//     // members
-//     CircularBuffer(int capacity)
-//     {
-//         this->capacity = capacity;
-//         this->head = 0;
-//         this->tail = 0;
-//         buffer.resize(capacity);
-//     }
-
-//     // Function to add an element to the buffer
-//     void push_back(int element)
-//     {
-//         buffer[head] = element;
-//         head = (head + 1) % capacity;
-//         if (head == tail) {
-//             tail = (tail + 1) % capacity;
-//         }
-//     }
-
-//     // Function to remove an element from the buffer
-//     void pop_front()
-//     {
-//         if (empty()) {
-//             throw out_of_range("Buffer is empty");
-//         }
-//         tail = (tail + 1) % capacity;
-//     }
-
-//     // Function to check if the buffer is empty
-//     bool empty() const { return head == tail; }
-
-//     // Function to check if the buffer is full
-//     bool full() const
-//     {
-//         return (head + 1) % capacity == tail;
-//     }
-
-//     // Function to get the size of the buffer
-//     int size() const
-//     {
-//         if (head >= tail) {
-//             return head - tail;
-//         }
-//         return capacity - (tail - head);
-//     }
-
-//     // Function to print the elements of the buffer
-//     void printBuffer() const
-//     {
-//         int idx = tail;
-//         while (idx != head) {
-//             printf("%d",buffer[idx]); printf("%s"," ");
-//             idx = (idx + 1) % capacity;
-//         }
-//         printf("\n");
-//     }
-// };
-

@@ -40,7 +40,7 @@ struct StandardCANIDDecoded {
     uint8_t SRC;
 };
 
-
+uint16_t createCANID(uint8_t PRIORITY, uint8_t SRC_ADDRESS, uint8_t MSG_NUM);
 // Structure of CAN ID :: Receiver side
 void decodeExtendedCANID(struct CANIDDecoded* myCAN ,uint32_t canID);
 void decodeStandardCANID(struct StandardCANIDDecoded *myCAN, uint32_t canID);

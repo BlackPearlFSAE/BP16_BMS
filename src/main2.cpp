@@ -281,7 +281,8 @@ void loop(){
         Serial.println("MODULE_DISCONNECT -- SHUTDOWN");
         Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
         Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
-        Serial.printf("BMU3 connect: %d \n",BMU_Package[2].BMUconnected);
+        Serial.printf("BMU3 connect: %d ",BMU_Package[2].BMUconnected);
+        Serial.printf("BMU4 connect: %d \n",BMU_Package[3].BMUconnected);
         shutdown_timer1 = millis();
     }
     return;
@@ -294,7 +295,12 @@ void loop(){
     // Fault Table , OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
     // Warning Condition for Dashboard light: LowVoltage , Module OverTemperature , Full Voltage
     (AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE) ? (ACCUM_Full = 1) : (ACCUM_Full = 0) ;
-    (AMS_Package.ACCUM_VOLTAGE <= 1.12 * ACCUM_MINVOLTAGE) ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
+    (AMS_Package.ACCUM_VOLTAGE <= 1.10 * ACCUM_MINVOLTAGE) ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
+
+    (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) ? (AMS_Package.OVERVOLT_CRITICAL = 1) : (AMS_Package.OVERVOLT_CRITICAL = 0) ;
+    (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) ? (AMS_Package.LOWVOLT_CRITICAL = 1) : (AMS_Package.LOWVOLT_CRITICAL = 0);
+    
+    // may delete
     (AMS_Package.OVERTEMP_WARNING > 0) ? (OVER_TEMP_WARN = 1) : (OVER_TEMP_WARN = 0);
     
     // Fault Condition for AMS_OK Shutdown
@@ -321,11 +327,18 @@ void loop(){
     sensorReading();
 
     // Debug AMS state
-    if(millis()-reference_time >= 500) {
+    if(millis()-reference_time >= 200) {
       // Serial.printf("BMU 0 ov cri: %d \n", BMU_Package[0].OVERVOLTAGE_CRITICAL);
       // Serial.printf("AMS ov cri: %d \n", AMS_Package.OVERVOLT_CRITICAL);
-      Serial.printf("AMS_OK: %d \n", AMS_OK);
-      // Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
+      // Serial.printf("AMS_OK: %d \n", AMS_OK);
+
+      Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
+      Serial.printf("AMS_MAX: %f \n", AMS_Package.ACCUM_MAXVOLTAGE);
+      Serial.printf("AMS_MIN: %f \n", AMS_Package.ACCUM_MINVOLTAGE);
+      Serial.printf("OVERVOLT_CRIT: %d \n", AMS_Package.OVERVOLT_CRITICAL);
+      Serial.printf("LOWVOLT_CRIT: %d \n", AMS_Package.LOWVOLT_CRITICAL);
+      // Serial.printf("OVERTEMPCRIT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
+
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
       
@@ -341,8 +354,8 @@ void loop(){
       // Serial.printf("Current_Sense: %2f \n", SDC_Signal_Board.CurrentSense);
 
       // 2nd one is connected to dummy test kit
-      // debugBMUmsg(1);
-      // debugBMUFault(1);
+      // debugBMUmsg(0);
+      // debugBMUFault(0);
 
       // twaiTroubleshoot();
       reference_time= millis();
@@ -533,7 +546,7 @@ void resetModuleData(int moduleIndex){
 void recalculateAMSPackage (int moduleIndex) {
   int &i = moduleIndex;
   // Recalculate AMS based on current BMU states
-  AMS_Package.ACCUM_VOLTAGE += (BMU_Package[i].V_MODULE) * 0.2;
+  AMS_Package.ACCUM_VOLTAGE += (static_cast<float> (BMU_Package[i].V_MODULE)) * 0.2;
   AMS_Package.OVERVOLT_WARNING |= BMU_Package[i].OVERVOLTAGE_WARNING;
   AMS_Package.LOWVOLT_WARNING |= BMU_Package[i].LOWVOLTAGE_WARNING;
   AMS_Package.OVERTEMP_WARNING |= BMU_Package[i].OVERTEMP_WARNING;
@@ -605,16 +618,16 @@ void debugFrame(){
 }
 void debugBMUmsg(int Module){
 
-    Serial.print("BMU_CHGready: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
-    Serial.print("V_Disch: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells,BIN);
+    // Serial.print("BMU_CHGready: "); Serial.println(BMU_Package[Module].BMUreadytoCharge);
+    // Serial.print("V_Disch: "); Serial.println(BMU_Package[Module].BalancingDischarge_Cells,BIN);
     Serial.print("V_CELL[10]: ");
     // can change to vector , for easy looping funcion
     for(short i=0; i< CELL_NUM; i++){
       Serial.print(BMU_Package[Module].V_CELL[i] * 0.02); Serial.print("V.  ");
     } Serial.println();
     
-    Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE *0.2); Serial.println("V.  ");
-    Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV * 0.1); Serial.println("V.  ");
+    // Serial.print("V_MODULE: "); Serial.print(BMU_Package[Module].V_MODULE *0.2); Serial.println("V.  ");
+    // Serial.print("DV: ") ; Serial.print(BMU_Package[Module].DV * 0.1); Serial.println("V.  ");
 
     Serial.print("TEMP[2]: ");
       Serial.print(BMU_Package[Module].TEMP_SENSE[0]*0.6 + 2); Serial.println("C.  ");

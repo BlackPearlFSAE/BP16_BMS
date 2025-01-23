@@ -319,19 +319,10 @@ void setup()
 
 
   frame.can_id  = 0x211; //FIRST frame
-  frame.can_dlc = 8;
-
   frame2.can_id  = 0x212;//SECOND frame
-  frame2.can_dlc = 8;
- 
   frame3.can_id  = 0x213;//THIRD frame
-  frame3.can_dlc = 8;
-
   frame4.can_id  = 0x111;//FOURTH frame
-  frame4.can_dlc = 8;
-
   frame5.can_id  = 0x112;//FIFTH frame
-  frame5.can_dlc = 8;
 
   while (!Serial);
   Serial.begin(115200);

@@ -8,10 +8,14 @@
 
 // Default configuration of AMS
 #define CELL_NUM 10
-#define BMU_NUM 3
+#define BMU_NUM 6 // Demo config
+// #define BMU_NUM 8 // Real config
+
 /*Amita Battery*/
 #define VMAX_CELL 4.2
+// #define VMAX_CELL 3.6
 #define VMIN_CELL 3.2
+// #define VMIN_CELL 3.9
 /*Thermistor*/
 #define TEMP_MAX_CELL 60
 #define TEMP_SENSOR_NUM 2
