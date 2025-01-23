@@ -129,7 +129,7 @@ void send1CANFrame();
 void sendCANFrame3();
 void sendCANFrame45();
 void debugFrame1();
-void debugFault(int byte);
+void debugFault(int frame, int byte);
 void readCAN();
 void extractCAN();
 // void select_MCP2515();
@@ -144,6 +144,7 @@ void clearDischarge();
 void getCellVoltage();
 float getTemp(int pin);
 void saveEEPROM();
+void selectId(int id);
 /*******************************************************************
   Setup Variables
   The following variables can be modified to configure the software.
@@ -160,11 +161,12 @@ float temp1,temp2;
 float vbatt;
 int sync = 0;//save to EEPROM
 int SYNC = 0;//get from EEPROM
-float tMax;//save to EEPROM
+float tMax = 60.0;//save to EEPROM
 float TMAX;//get from EEPROM
-float maxVolt,minVolt; // save from EEPROM
+float maxVolt = 4.2;
+float minVolt = 3.2; // save from EEPROM
 float MAXVOLT,MINVOLT; // get from EEPROM
-float dVMax; // save from EEPROM
+float dVMax = 0.2; // save from EEPROM
 float DVMAX; // get from EEPROM
 
 
@@ -316,13 +318,8 @@ void setup()
 
   wakeup_sleep(TOTAL_IC);
   LTC6811_wrcfg(TOTAL_IC, BMS_IC);
-
-
-  frame.can_id  = 0x211; //FIRST frame
-  frame2.can_id  = 0x212;//SECOND frame
-  frame3.can_id  = 0x213;//THIRD frame
-  frame4.can_id  = 0x111;//FOURTH frame
-  frame5.can_id  = 0x112;//FIFTH frame
+  
+  selectId(3);// for selecting id for each module.
 
   while (!Serial);
   Serial.begin(115200);
@@ -335,7 +332,7 @@ void setup()
   // mcp2515.setFilter(MCP2515::RXF0,true,0x01EE5000);
   // In measurement loop0.
   wakeup_idle(TOTAL_IC);
-  delay(100);
+  // delay(100);
   // quikeval_SPI_connect();
   spi_enable(SPI_CLOCK_DIV16); 
   LTC6811_init_cfg(TOTAL_IC, BMS_IC);
@@ -371,6 +368,7 @@ void loop()
   // }
 
   while(!charging){
+    // delay(500);
     // Serial.print("charging : ");Serial.println(charging);
     temp1 = getTemp(A0);
     temp2 = getTemp(A3);
@@ -387,12 +385,12 @@ void loop()
 
     // Serial.print("writeFlag after IF : ");Serial.println(writeFlag);
     
-    readCAN(); 
+    // readCAN(); 
     if(readFrame.can_id == 0x7FF){
       // Serial.print("ID ");Serial.println(readFrame.can_id);
-      extractCAN();
+      // extractCAN();
     }
-    measurement_loop(DATALOG_DISABLED, timeOut, sync, charging, balanceActive, voltFull);
+      measurement_loop(DATALOG_DISABLED, timeOut, sync, charging, balanceActive, voltFull);
     
     // delay(100);
 
@@ -1010,7 +1008,7 @@ void getCellVoltage(){
 void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, int balanceActive, int voltFull)
 {
   current = millis();
-  float temp = 60.0;
+  // float temp = 60.0;
   int8_t error = 0;
   // char input = 0;
 
@@ -1040,7 +1038,7 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
       wakeup_idle(TOTAL_IC);
       error = LTC6811_rdcv(SEL_ALL_REG, TOTAL_IC, BMS_IC);
       check_error(error);
-      // print_cells(datalog_en);
+      print_cells(datalog_en);
       deselect_LTC6811();
       
       // clearing byte
@@ -1077,7 +1075,10 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
       avrBatt = vbatt / 10;
       deltaV = maxVolt - avrBatt;   
 
-
+      // Serial.print("vbatt : ");Serial.println(vbatt);
+      // Serial.print("deltaV : ");Serial.println(deltaV);
+      // Serial.print("maxVolt");Serial.println(maxVolt);
+      // Serial.print("avrBatt : ");Serial.println(avrBatt);
 
 
       //pack & send CAN 1st message
@@ -1111,9 +1112,14 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
       // }
       
       
-      for (int w =0; w<10;w++){
-        cellVoltage = BMS_IC[0].cells.c_codes[w] * 0.0001;
-        packCANFrame45(cellVoltage,temp,w, maxVolt, minVolt);
+      for (int e =0; e<10;e++){
+        cellVoltage = BMS_IC[0].cells.c_codes[e] * 0.0001;
+        packCANFrame45(cellVoltage,temp1,e, maxVolt, minVolt);
+        // debugFault(4,0);
+        // debugFault(4,1);
+        // debugFault(4,2);
+        // debugFault(4,3);
+        
       }
       
       if(current - previousMill2 >= intervalFault){
@@ -1217,7 +1223,7 @@ void packCANData2() {
     if (cell + 1 <= 8) {
       frame2.data[cell] = voltageScaled;
     }
-    if (cell+1 >= 9 && cell + 1 <= 10) {
+    if (cell+1 >= 9 && cell + 1 <= 10) {    
       frame3.data[cell-8] = voltageScaled;
     }
 
@@ -1248,9 +1254,10 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
   //   frame4.data[c] = 0;
   // }
     // Serial.println(deltaV);
+  // Serial.print("MaxVolt");
 
-  // first byte
-    if(cellVoltage >= 0.95 * maxVolt){ // for OverVoltage Warning
+  // first fault
+    if(cellVoltage >= 4.1){ // for OverVoltage Warning
       if(e<8){
         frame4.data[0] |= (1<<(7-e));
       }
@@ -1259,7 +1266,7 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
       }
     }
 
-    //second byte
+    //second fault
     if(cellVoltage > maxVolt){ // for OverVoltage Critical
       if(e<8){
         frame4.data[2] |= (1<<(7-e));
@@ -1280,7 +1287,7 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
     }
 
 
-    if(cellVoltage <= 1.1 * minVolt){ //for Low Voltage critical
+    if(cellVoltage <=  minVolt){ //for Low Voltage critical
       if(e<8){
         frame4.data[6] |= (1<<(7-e));
       }
@@ -1289,7 +1296,7 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
       }
     }
 
-    if(temp >= 0.8*60){//over temp warning
+    if(temp >= 60){//over temp warning
       if(e<8){
         frame5.data[0] |= (1<<(7-e));
       }
@@ -1298,7 +1305,7 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
       }
     }
 
-    if(temp >= 0.9*60){//overtemp critical
+    if(temp >= 60){//overtemp critical
       if(e<8){
         frame5.data[2] |= (1<<(7-e));
       }
@@ -1338,7 +1345,20 @@ void packCANFrame45(float cellVoltage, float temp,  int e, float maxVolt, float 
   // if(voltFull) frame.data[1] |= (1<<9);
     
 }
-void debugFault(int byte){
+void debugFault(int frame ,int byte){
+
+ if(frame == 4){
+
+  Serial.print("frame : ");Serial.print(frame);Serial.print("| byte :");Serial.println(byte);
+  for(int i = 7; i >= 0; i--) {
+// Print each bit (0 or 1)
+    Serial.print((frame4.data[byte] >> i) & 1);
+    Serial.print(" ");
+  }
+  Serial.println();
+ }
+if(frame == 5){
+  Serial.print("frame : ");Serial.print(frame);Serial.print("| byte :");Serial.println(byte);
   Serial.print("byte :");Serial.println(byte);
   for(int i = 7; i >= 0; i--) {
 // Print each bit (0 or 1)
@@ -1346,6 +1366,7 @@ void debugFault(int byte){
     Serial.print(" ");
   }
   Serial.println();
+}
   
 //   for(int i = 7; i >= 0; i--) {
 // // Print each bit (0 or 1)
@@ -1517,6 +1538,105 @@ float getTemp(int pin){
   Serial.print("tempC ");Serial.print(pin);Serial.print(": ");Serial.println(tempC);
   return tempC;
 }
+
+void selectId(int id){
+  if(id==1){
+    frame.can_id  = 0x211; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x212;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x213;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x111;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x112;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==2){
+    frame.can_id  = 0x221; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x222;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x223;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x121;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x122;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==3){
+    frame.can_id  = 0x231; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x232;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x233;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x131;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x132;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==4){
+    frame.can_id  = 0x241; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x242;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x243;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x141;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x142;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==5){
+    frame.can_id  = 0x251; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x252;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x253;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x151;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x152;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==6){
+    frame.can_id  = 0x261; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x262;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x263;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x161;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x162;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==7){
+    frame.can_id  = 0x271; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x272;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x273;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x171;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x172;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+  if(id==8){
+    frame.can_id  = 0x281; //FIRST frame
+    frame.can_dlc = 8;
+    frame2.can_id  = 0x282;//SECOND frame
+    frame2.can_dlc = 8;
+    frame3.can_id  = 0x283;//THIRD frame
+    frame3.can_dlc = 8;
+    frame4.can_id  = 0x181;//FOURTH frame
+    frame4.can_dlc = 8;
+    frame5.can_id  = 0x182;//FIFTH frame
+    frame5.can_dlc = 8;
+  }
+};
 // Another set of variable
 
 /*!*********************************
