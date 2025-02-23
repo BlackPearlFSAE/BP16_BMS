@@ -42,7 +42,9 @@ RTOS and Push ROS topics
 #define EMR_O GPIO_NUM_18
 #define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
 // Digital Output 
-#define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
+// #define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
+#define AMS_OUT GPIO_NUM_11 // SL 1 => Check with multimeter
+// #define AMS_OUT GPIO_NUM_47 // SL 1 => Check with multimeter
 #define LVlight GPIO_NUM_48
 #define TEMPlight GPIO_NUM_21
 // Macros
@@ -62,7 +64,8 @@ unsigned long reference_time2 = 0;
 unsigned long reference_time3 = 0;
 unsigned long communication_timer1 = 0;
 unsigned long shutdown_timer1 = 0;
-unsigned long lastModuleResponse[BMU_NUM] = {0};
+// unsigned long lastModuleResponse[BMU_NUM] = {0};
+unsigned long lastModuleResponse[BMU_NUM];
 // Hardware Timer
 hw_timer_t *My_timer1 = NULL;
 hw_timer_t *My_timer2 = NULL;
@@ -231,9 +234,6 @@ void loop(){
  
   //------------------------------------Message Reception
 
-    
-  
-
   // if RX buffer isn't cleared after its full within 1 tick Queue overflow alert will fired
   if (twai_receive(&receivedMessage, 1) == ESP_OK) 
   {
@@ -258,7 +258,7 @@ void loop(){
   // if No module is connected from CAN bus , run this code and return until the bus is active
   else if (millis()-communication_timer1 >= DISCONNENCTION_TIMEOUT){
     // Shutdown
-    digitalWrite(AMS_OUT,LOW);
+    digitalWrite(AMS_OUT,HIGH);
     if( millis()-shutdown_timer1 >= 400 ){
         Serial.println("NO_BYTE_RECV");
         shutdown_timer1 = millis();
@@ -297,14 +297,23 @@ void loop(){
     (AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE) ? (ACCUM_Full = 1) : (ACCUM_Full = 0) ;
     (AMS_Package.ACCUM_VOLTAGE <= 1.10 * ACCUM_MINVOLTAGE) ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
 
-    (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) ? (AMS_Package.OVERVOLT_CRITICAL = 1) : (AMS_Package.OVERVOLT_CRITICAL = 0) ;
-    (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) ? (AMS_Package.LOWVOLT_CRITICAL = 1) : (AMS_Package.LOWVOLT_CRITICAL = 0);
+    // (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) ? (AMS_Package.OVERVOLT_CRITICAL = 1) : (AMS_Package.OVERVOLT_CRITICAL = 0) ;
+    // (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) ? (AMS_Package.LOWVOLT_CRITICAL = 1) : (AMS_Package.LOWVOLT_CRITICAL = 0);
+
+    (AMS_Package.ACCUM_VOLTAGE > ACCUM_MAXVOLTAGE) ? (AMS_Package.OVERVOLT_CRITICAL = 1) : (AMS_Package.OVERVOLT_CRITICAL = 0) ;
+    (AMS_Package.ACCUM_VOLTAGE < ACCUM_MINVOLTAGE) ? (AMS_Package.LOWVOLT_CRITICAL = 1) : (AMS_Package.LOWVOLT_CRITICAL = 0);
+
+    
     
     // may delete
     (AMS_Package.OVERTEMP_WARNING > 0) ? (OVER_TEMP_WARN = 1) : (OVER_TEMP_WARN = 0);
     
     // Fault Condition for AMS_OK Shutdown
     bool ACCUMULATOR_Fault;
+    // Dummy Condition for headless testing
+    // AMS_Package.LOWVOLT_CRITICAL = 0;
+    // AMS_Package.OVERVOLT_CRITICAL = 0;
+    // AMS_Package.OVERTEMP_CRITICAL = 0;
     ACCUMULATOR_Fault = AMS_Package.OVERVOLT_CRITICAL | AMS_Package.LOWVOLT_CRITICAL | AMS_Package.OVERTEMP_CRITICAL;
     (ACCUMULATOR_Fault > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
     
@@ -316,28 +325,32 @@ void loop(){
       // Set ReadytoCharge Flag, only if All BMU are ready to charge.
       (AMS_Package.ACCUM_CHG_READY > 0) ? (ACCUM_ReadytoCharge = 1) : (ACCUM_ReadytoCharge = 0);
       ((ACCUMULATOR_Fault | OBCFault) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
-      
     }
      
   /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
- 
+    // LOW_VOLT_WARN = 0;
+    
     (AMS_OK) ? digitalWrite(AMS_OUT,HIGH) : digitalWrite(AMS_OUT,LOW);
+    
+    // For Active Low switch  
+    // (AMS_OK) ? digitalWrite(AMS_OUT,LOW) : digitalWrite(AMS_OUT,HIGH);
+    // (AMS_OK) ? digitalWrite(47,LOW) : digitalWrite(47,HIGH);
+    
     (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
     (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
-    sensorReading();
+    // sensorReading();
 
     // Debug AMS state
     if(millis()-reference_time >= 200) {
       // Serial.printf("BMU 0 ov cri: %d \n", BMU_Package[0].OVERVOLTAGE_CRITICAL);
       // Serial.printf("AMS ov cri: %d \n", AMS_Package.OVERVOLT_CRITICAL);
-      // Serial.printf("AMS_OK: %d \n", AMS_OK);
-
+      Serial.printf("AMS_OK: %d \n", AMS_OK);
       Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
       Serial.printf("AMS_MAX: %f \n", AMS_Package.ACCUM_MAXVOLTAGE);
       Serial.printf("AMS_MIN: %f \n", AMS_Package.ACCUM_MINVOLTAGE);
       Serial.printf("OVERVOLT_CRIT: %d \n", AMS_Package.OVERVOLT_CRITICAL);
       Serial.printf("LOWVOLT_CRIT: %d \n", AMS_Package.LOWVOLT_CRITICAL);
-      // Serial.printf("OVERTEMPCRIT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
+      Serial.printf("OVERTEMPCRIT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
 
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
@@ -401,8 +414,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
     int i = decodedCANID.SRC - 1; // SRC stats at 0x01, subtract 1 for indexing.
     if(i >= BMU_NUM) return; // Bounds check
     // Serial.println(decodedCANID.MSG_NUM);
-  // Mark timestamp of successfully received Module, 
-  // No update for disconnected BMU.
+  // Mark timestamp of successfully received Module, No update for disconnected BMU.
     lastModuleResponse[i] = millis();
   
   // unpack ReceiveFrame to BMUframe

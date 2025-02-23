@@ -8,6 +8,7 @@
 
 // Default configuration of AMS
 #define CELL_NUM 10
+// #define BMU_NUM 2 // Demo config
 #define BMU_NUM 6 // Demo config
 // #define BMU_NUM 8 // Real config
 
@@ -49,6 +50,8 @@ struct AMSdata {
   float ACCUM_VOLTAGE = 0.0; 
   float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Default value
   float ACCUM_MINVOLTAGE = (VMIN_CELL * CELL_NUM * BMU_NUM); // Defualt value assum 8 module
+  // float ACCUM_MAXVOLTAGE = (0); // Default value
+  // float ACCUM_MINVOLTAGE = (0); // Defualt value assum 8 module
   bool ACCUM_CHG_READY = 0;
 
   bool OVERVOLT_WARNING = 0;

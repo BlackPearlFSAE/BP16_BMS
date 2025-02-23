@@ -319,7 +319,7 @@ void setup()
   wakeup_sleep(TOTAL_IC);
   LTC6811_wrcfg(TOTAL_IC, BMS_IC);
   
-  selectId(3);// for selecting id for each module.
+  selectId(6);// for selecting id for each module.
 
   while (!Serial);
   Serial.begin(115200);
