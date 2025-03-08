@@ -11,6 +11,7 @@
 // #define BMU_NUM 2 // Demo config
 #define BMU_NUM 6 // Demo config
 // #define BMU_NUM 8 // Real config
+// #define BMU_NUM 0
 
 /*Amita Battery*/
 #define VMAX_CELL 4.2
@@ -64,8 +65,8 @@ struct AMSdata {
   bool OVERTEMP_CRITICAL = 0;
   bool OVERDIV_CRITICAL = 0;
 
-  bool AMS_OK = 0; // AMS_OUT+ ,AMS_GND
-
+  // bool AMS_OK = 0; // Use this for Active Low Output
+  bool AMS_OK = 1; // Use this for Active High Output
 };
 
 // Physical condition of OBC On board charger , charging power , and safety information

@@ -13,9 +13,6 @@ RTOS and Push ROS topics
 #include "soc/rtc_cntl_reg.h"
 #include <driver/gpio.h>
 #include <driver/twai.h>
-#include <freertos/FreeRTOS.h>  
-#include <freertos/task.h>
-#include <freertos/queue.h>
 #include <freertos/timers.h>       
 // #include "LittleFS.h"
 // #include "SD.h"
@@ -27,8 +24,8 @@ RTOS and Push ROS topics
 #include <AMS.h>
 // #include <micro_ros_arduino.h>
 /************************* Define macros *****************************/
-#define CAN_RX  GPIO_NUM_13 // This will be 
-#define CAN_TX  GPIO_NUM_14
+#define CAN_RX  GPIO_NUM_36 // This will be 
+#define CAN_TX  GPIO_NUM_35
 // ADC pin
 #define APS1 GPIO_NUM_4
 #define APS2 GPIO_NUM_5
@@ -38,15 +35,15 @@ RTOS and Push ROS topics
 // Digital input
 #define BSPDIN GPIO_NUM_15  // Check BSPD OK signal from BSPD directly 
 #define IMDIN GPIO_NUM_16   // Check IMD OK signal from IMD directly
-#define SDCIN GPIO_NUM_17    // Check OK signal from Shutdown Circuit => Its status must match all below Signal pin , otherwise faulty
+#define SDCIN GPIO_NUM_17 // AIR+   // Check OK signal from Shutdown Circuit => Its status must match all below Signal pin , otherwise faulty
 #define EMR_O GPIO_NUM_18
 #define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
 // Digital Output 
 // #define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
-#define AMS_OUT GPIO_NUM_11 // SL 1 => Check with multimeter
+#define AMS_OUT GPIO_NUM_21 // SL 1 => Check with multimeter
 // #define AMS_OUT GPIO_NUM_47 // SL 1 => Check with multimeter
 #define LVlight GPIO_NUM_48
-#define TEMPlight GPIO_NUM_21
+#define TEMPlight GPIO_NUM_47
 // Macros
 #define OBC_SYNC_TIME 500
 #define SYNC_TIME 200
@@ -137,7 +134,7 @@ void IRAM_ATTR onTimer2() {
 
 void setup() {
 
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
+  // WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   Serial.begin(115200);
   /* Shutdown System setup */
   pinMode(SDCIN,INPUT_PULLDOWN); 
@@ -148,6 +145,7 @@ void setup() {
   pinMode(AMS_OUT,OUTPUT);
   pinMode(LVlight,OUTPUT);
   pinMode(TEMPlight,OUTPUT);
+
   // ADC
   // punMode(BPS1,INPUT);
       
@@ -188,8 +186,7 @@ void setup() {
   timerAlarmWrite(My_timer2, 500 * 1000, true);  // 500ms interval
   timerAlarmEnable(My_timer2);
 
-   
-
+  
   // FreeRTOS tasks core 0 USB or Uart serial (Disable BackGround task like WiFi BLe , to make core 0 faster)
 
   /* CORE0 for coordinating BMS and Electrical System*/
@@ -213,7 +210,7 @@ void setup() {
   
 void loop(){
   // Check if Charger LV AUX plug is actually into ACCUM 2nd Floor connector (May change to external interrupt)
-  (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
+  // (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
   /*___Task 1 : Communication ====================================================*/
   // ------------------------------------Message Transmission
   
@@ -242,8 +239,8 @@ void loop(){
     // Serial.printf("BMU3 connect: %d \n",BMU_Package[2].BMUconnected);
     // debugFrame();
     // Reset BMU data for the one that has disconnected from CAN Bus
-    // Readjust MIN MAX VOLTAGE of AMS by counting the left overactiveModule
-    // Reset module if not
+
+    // Reset BMU struct Value
     dynamicModulereset();
     // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package:
     unpackBMUmsgtoAMS(&receivedMessage, BMU_Package); // 200ms cycle & 500ms cycle of faultcode
@@ -330,11 +327,11 @@ void loop(){
   /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
     // LOW_VOLT_WARN = 0;
     
+    // For Active High Switch (Butterfly board)
     (AMS_OK) ? digitalWrite(AMS_OUT,HIGH) : digitalWrite(AMS_OUT,LOW);
     
-    // For Active Low switch  
+    // For Active Low switch (Yss Blackboard)
     // (AMS_OK) ? digitalWrite(AMS_OUT,LOW) : digitalWrite(AMS_OUT,HIGH);
-    // (AMS_OK) ? digitalWrite(47,LOW) : digitalWrite(47,HIGH);
     
     (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
     (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
@@ -348,9 +345,9 @@ void loop(){
       Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
       Serial.printf("AMS_MAX: %f \n", AMS_Package.ACCUM_MAXVOLTAGE);
       Serial.printf("AMS_MIN: %f \n", AMS_Package.ACCUM_MINVOLTAGE);
-      Serial.printf("OVERVOLT_CRIT: %d \n", AMS_Package.OVERVOLT_CRITICAL);
-      Serial.printf("LOWVOLT_CRIT: %d \n", AMS_Package.LOWVOLT_CRITICAL);
-      Serial.printf("OVERTEMPCRIT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
+      Serial.printf("OV_CRIT: %d \n", AMS_Package.OVERVOLT_CRITICAL);
+      Serial.printf("LV_CRT: %d \n", AMS_Package.LOWVOLT_CRITICAL);
+      Serial.printf("OVT_CRT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
 
       // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
       // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
@@ -369,7 +366,6 @@ void loop(){
       // 2nd one is connected to dummy test kit
       // debugBMUmsg(0);
       // debugBMUFault(0);
-
       // twaiTroubleshoot();
       reference_time= millis();
     }
@@ -401,28 +397,22 @@ void packBMUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger
 }
 void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   
-  
+  // decodeCANID according to BP16 agreement
   StandardCANIDDecoded decodedCANID;
   decodeStandardCANID(&decodedCANID, (BCUreceived->identifier) );
-  // Decode logic
-  // CANIDDecoded decodedCANID;
-  // decodeExtendedCANID(&decodedCANID, (BCUreceived->identifier));
-  // if(decodedCANID.BASE_ID != 0x0E || decodedCANID.DEST != 0xE5)
-  //   return;
   
   // Distingush Module ID
     int i = decodedCANID.SRC - 1; // SRC stats at 0x01, subtract 1 for indexing.
-    if(i >= BMU_NUM) return; // Bounds check
-    // Serial.println(decodedCANID.MSG_NUM);
-  // Mark timestamp of successfully received Module, No update for disconnected BMU.
+    if(i >= BMU_NUM) return;      // Bounds check
+  
+    // Mark timestamp of successfully received Module, No update for disconnected BMU.
     lastModuleResponse[i] = millis();
   
-  // unpack ReceiveFrame to BMUframe
+  /* ---------------- unpack ReceiveFrame to BMUframe ------------------- */
   /*  Message Priority 11 :: BMUModule & Cells data  */
   if(decodedCANID.PRIORITY == 0x02)
   {
-    switch (decodedCANID.MSG_NUM) 
-    { 
+    switch (decodedCANID.MSG_NUM) { 
       // MSG1 == Operation status
       case 1:
         // Charging Ready
@@ -453,8 +443,7 @@ void unpackBMUmsgtoAMS ( twai_message_t* BCUreceived , BMUdata *BMU_Package) {
   /*  Message Priority 10 :: FaultCode  */
   else if(decodedCANID.PRIORITY == 0x01)
   {
-    switch (decodedCANID.MSG_NUM)
-    {
+    switch (decodedCANID.MSG_NUM) {
       case 1:
         // Merge H and L byte of each FaultCode back to 10 bit binary
         BMU_Package[i].OVERVOLTAGE_WARNING =  mergeHLbyte( BCUreceived->data[0], BCUreceived->data[1] );  
@@ -582,21 +571,14 @@ void resetAllStruct(){
   OBC_Package = OBCdata();
 }
 bool checkModuleDisconnect(){
-  // initialized as 1
+
   bool disconnectedFromCAN = 1; 
   for(short i =0; i< BMU_NUM ; i++){
-    // if any of the board aren't in connection => throw error
-    if(BMU_Package[i].BMUconnected == 0){
-      // resetModuleData(i); // Reset that module data (revert voltage , temp., flags , etc. Back to zero)
-      disconnectedFromCAN = 0;
-    }
-      
+    if(BMU_Package[i].BMUconnected == 0)
+      disconnectedFromCAN = 0; 
   }
-    // Then set shutdown
-
     return disconnectedFromCAN;
 }
-
 void dynamicModulereset(){ 
   for(short i =0; i< BMU_NUM ; i++){
     // if any of the board aren't in connection => throw error
