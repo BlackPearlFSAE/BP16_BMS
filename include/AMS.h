@@ -1,3 +1,5 @@
+// Containing Different Object representing the whole Electrical System
+
 // Data Aggregation , and Relay to Other Sub System , e.g. Telemetry , DataLogger, BMS GUI
 // Report BMS data, and Faulty status code // Serialize this data in 8 bit buffer
 
@@ -23,9 +25,9 @@
 #define TEMP_SENSOR_NUM 2
 #define DVMAX 0.2
 
-
 struct BMUdata {
   // Basic BMU Data
+  uint32_t bmu_id = 0x00;
   uint8_t V_CELL[CELL_NUM] = {0};
   uint8_t TEMP_SENSE[TEMP_SENSOR_NUM] = {0};
   uint8_t V_MODULE = 0;
