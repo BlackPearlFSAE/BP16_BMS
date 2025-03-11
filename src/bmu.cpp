@@ -81,7 +81,8 @@ In this sketch book:
 #include "UserInterface.h"
 #include "LTC681x.h"
 #include "LTC6811.h"
-#include "_util_com.h"
+// #include <_util_AMS.h>
+// include <_util_SD.h>
 
 /************************* Defines *****************************/
 #define ENABLED 1

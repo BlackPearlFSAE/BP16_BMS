@@ -1,11 +1,23 @@
 #include <Arduino.h>
+
+#ifdef ARDUINO_ARCH_AVR
+#endif
+
+#ifdef ESP32
+
 // File system and ESP32 SPI SD lib
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
-#include <_util_datalog.h>
+#include <_util_SD.h>
 
 // Preprocessor to choose different datalogging function 
+
+void getSDsize(){
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+}
+
 // SD initialization
 void SD_SPI_init(int sd_sck, int sd_miso, int sd_mosi, int sd_cs) {
 
@@ -32,9 +44,7 @@ void SD_SPI_init(int sd_sck, int sd_miso, int sd_mosi, int sd_cs) {
   else 
     Serial.println("UNKNOWN");  
   
-  // get and calculate card size and partition
-  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+  getSDsize();
 
 }
 
@@ -72,3 +82,4 @@ void appendFile(fs::FS &fs, const char *path, const char *message) {
 // delete file
 
 // Read file
+#endif
