@@ -22,24 +22,11 @@ RTOS and Push ROS topics
 #include "SPI.h"
 
 // utility function
-#include <_util_AMS.h>
-#include <_util_SD.h>
+#include <ams_config.h>
+#include <SD_utility.h>
 /************************* Define macros *****************************/
-// CAN/TWAI bus pins - For ButterFlyBoard
-#define TWAI_RX_PIN  GPIO_NUM_36 // This will be 
-#define TWAI_TX_PIN  GPIO_NUM_35
-
-// ADC pin
-#define APS1 GPIO_NUM_4
-#define APS2 GPIO_NUM_5
-#define BPS1 GPIO_NUM_6
-#define BPS2 GPIO_NUM_7
-#define CURR GPIO_NUM_8
-// Digital input
-#define BSPDIN GPIO_NUM_15  // Check BSPD OK signal from BSPD directly 
-#define IMDIN GPIO_NUM_16   // Check IMD OK signal from IMD directly
-#define SDCIN GPIO_NUM_17 // AIR+   // Check OK signal from Shutdown Circuit => Its status must match all below Signal pin , otherwise faulty
-#define EMR_O GPIO_NUM_18
+#define TWAI_RX_PIN  GPIO_NUM_13 // This will be 
+#define TWAI_TX_PIN  GPIO_NUM_14
 #define OBCIN GPIO_NUM_9   // Check OK Signal from Charging Shutdown Circuit, indicates that it is charged
 // Digital Output 
 // #define AMS_OUT GPIO_NUM_47  // OUTPUT Fault Signal to BMS relay
@@ -55,7 +42,7 @@ twai_message_t sendMessage;
 twai_message_t J1939msg;
 twai_message_t receivedMessage;
 
-// Software Timer
+// Software Timer reference (Iniit zero)
 unsigned long reference_time = 0; 
 unsigned long reference_time2 = 0;
 unsigned long reference_time3 = 0;
@@ -65,15 +52,18 @@ unsigned long lastModuleResponse[BMU_NUM];
 unsigned long logCount = 0;
 unsigned long lastlogtime = 0; 
 unsigned long lastStatTime = 0; 
-// Hardware Timer
+
+// Hardware Timer object
 hw_timer_t *My_timer1 = NULL;
 hw_timer_t *My_timer2 = NULL;
 
 // BMU data , Accumulator data structure, Sensing data.
 BMUdata BMU_Package[BMU_NUM];
 AMSdata AMS_Package;
-LVsignal Signal_Package;
 OBCdata OBC_Package;
+
+// ThreeWire myWire(DS1302data,DS1302clk,DS1302rst); // IO, SCLK, CE
+// RtcDS1302<ThreeWire> Rtc(myWire);
 
 // Alias names
 bool &AMS_OK = AMS_Package.AMS_OK;
@@ -103,21 +93,22 @@ const byte TempMaxCell = (TEMP_MAX_CELL);
 const byte dVmax = (DVMAX / 0.1); 
 const bool BMUUpdateEEPROM = 0; // Flag for BMU to update its EEPROM
 
-// Assign pin for SD Card pins for ESP32S3devkit-c1 board
-#define SD_SCK  SCK
-#define SD_MISO MISO
-#define SD_MOSI MOSI
-#define SD_CS   SS
+// Assign pin for SD Card pins for ESP32S3devkit-c1 board (Green Board)
+#define SD_SCK  39
+#define SD_MISO 40
+#define SD_MOSI 41
+#define SD_CS   38
 
 // Data logging configuration
-#define LOG_INTERVAL_MS 500  // How often to write summary data (every 5 seconds)
-#define CSV_BMU_package "/firstFloor_log.csv"
-#define CSV_AMS_package "/secondFloor_log.csv"
+#define LOG_INTERVAL_MS 1000  // How often to write summary data (every 5 seconds)
 #define CSV_BMU_HEADER "Time,bmu_id,bmu_volt,bmu_temp1,bmu_temp2,bmu_dv,bmu_connect,bmu_ready_chg,bmu_cell_in_balance,bmu_ov_crti,bmu_ov_warn,bmu_lv_crit,bmu_lv_warn,bmu_ovt_crit,bmu_ovt_warn,bmu_ovd_crit,bmu_ovd_warn,Cell1,Cell2,Cell3,Cell4,Cell5,Cell6,Cell7,Cell8,Cell9,Cell10\n"
-#define CSV_AMS_HEADER "Time,accel_ped1,accel_ped2,break_ped1,break_ped2,current_A,bspd_in,imd_in,air+,emr_o,obc_in,temp_light,lv_light,ams_ok,ams_volt,ams_ov_crit,ams_ov_wanr,ams_lv_crit,ams_lv_warn,ams_ovt_crit,ams_ovt_warn,ams_ovd_crit,ams_ovd_warn\n"
-
+#define CSV_AMS_HEADER "Time,ams_ok,ams_volt,ams_ov_crit,ams_ov_wanr,ams_lv_crit,ams_lv_warn,ams_ovt_crit,ams_ovt_warn,ams_ovd_crit,ams_ovd_warn\n"
+// #define CSV_AMS_HEADER "Time,accel_ped1,accel_ped2,break_ped1,break_ped2,current_A,bspd_in,imd_in,air+,emr_o,obc_in,temp_light,lv_light,ams_ok,ams_volt,ams_ov_crit,ams_ov_wanr,ams_lv_crit,ams_lv_warn,ams_ovt_crit,ams_ovt_warn,ams_ovd_crit,ams_ovd_warn\n"
+// #define CSV_BMU_package "/bmu_log.csv"
+#define CSV_AMS_filename "/amsMaster.csv"
+#define CSV_BMU_filename "/bmu"
 /**************** Local Function Delcaration *******************/
-void packBCUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged);
+void packAMSmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged);
 void packBCU_OBCmsg ( twai_message_t *BCUsent, bool &BMS_OK , bool &ReadytoCharge, bool &OverDivCritical_Yes, bool &Voltage_is_Full);
 
 void processOBCmsg ( twai_message_t *receivedframe );
@@ -129,30 +120,26 @@ void debugFrame();
 bool checkModuleDisconnect(BMUdata *BMU_Package);
 void twaiTroubleshoot();
 void resetAllStruct();
-void processSensorsData();
-void log1stFloordata(int moduleindex);
-void log2ndFloordata();
+
+void logBMUdata(int moduleindex);
+void logAMSmasterdata();
 
 /*******************************************************************
   ==============================Setup==============================
 ********************************************************************/
-void IRAM_ATTR onTimer1() {
+void IRAM_ATTR onTimer_dischargeMode() {
   // May or may not be critical section , --- later to be thought out
   CAN_SEND_FLG1 = 1;
 }
-void IRAM_ATTR onTimer2() {
+void IRAM_ATTR onTimer_chargeMode() {
   CAN_SEND_FLG2 = 1;
 }
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   Serial.begin(115200);
-  /* Shutdown System setup */
-    pinMode(SDCIN,INPUT_PULLDOWN); 
-    pinMode(OBCIN,INPUT_PULLDOWN);
-    pinMode(IMDIN,INPUT_PULLDOWN);
-    pinMode(BSPDIN,INPUT_PULLDOWN);
-    pinMode(EMR_O,INPUT_PULLDOWN);
+  // Setup AMS output  
+    pinMode(OBCIN,INPUT_PULLDOWN); // Pulldown to prevent false trip
     pinMode(AMS_OUT,OUTPUT);
     pinMode(LVlight,OUTPUT);
     pinMode(TEMPlight,OUTPUT);
@@ -161,9 +148,9 @@ void setup() {
   sendMessage.extd = false;
   receivedMessage.extd = false;
   J1939msg.extd = true;
-  twai_general_config_t general_config = TWAI_GENERAL_CONFIG_DEFAULT(TWAI_RX_PIN, TWAI_TX_PIN, TWAI_MODE_NORMAL);
-  general_config.tx_queue_len = 800; // worstcase is 152 bit/frame , this should hold about 5 frame
-  general_config.rx_queue_len = 1300; // RX queue hold about 8 frame
+  twai_general_config_t general_config = TWAI_GENERAL_CONFIG_DEFAULT(TWAI_TX_PIN, TWAI_RX_PIN, TWAI_MODE_NORMAL);
+  general_config.tx_queue_len = 2800; // worstcase is 152 bit/frame , this should hold about 5 frame
+  general_config.rx_queue_len = 2800; // RX queue hold about 8 frame
   twai_timing_config_t timing_config = TWAI_TIMING_CONFIG_250KBITS();
   twai_filter_config_t filter_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(); // May config this later
   // Install the TWAI driver
@@ -182,37 +169,40 @@ void setup() {
       }
     }
 
-     // Hardware periodic timer 100ms & 500ms
-  My_timer1 =  timerBegin(0, 80, true);  // Timer with prescaler
-  timerAttachInterrupt(My_timer1, &onTimer1, true);
-  timerAlarmWrite(My_timer1, 100 * 1000, true);  // 100ms interval
+  // Setup timer interrupt every 200ms (Discharge Mode timer)
+  My_timer1 =  timerBegin(0, 80, true);  // 80 pre
+  timerAttachInterrupt(My_timer1, &onTimer_dischargeMode, true);
+  timerAlarmWrite(My_timer1, 100 * 1000, true);  
   timerAlarmEnable(My_timer1);
 
-  // Setup timer for 500ms intervals 
+  // Setup timer interrupt every 500ms (Charge Mode timer)
   My_timer2 = timerBegin(1, 80, true);
-  timerAttachInterrupt(My_timer2, &onTimer2, true);
-  timerAlarmWrite(My_timer2, 500 * 1000, true);  // 500ms interval
+  timerAttachInterrupt(My_timer2, &onTimer_chargeMode, true);
+  timerAlarmWrite(My_timer2, 500 * 1000, true);  
   timerAlarmEnable(My_timer2);
 
-  /* --------------------------------------------- Initialize SD card
+  /* --------------------------------------------- Initialize SD card */
   SD_SPI_init( SD_SCK, SD_MISO, SD_MOSI, SD_CS );
-
-  // Create 1st Floor Log File
-  if (!SD.exists(CSV_BMU_package)) {
-    Serial.println("Creating 1stFloor log file with headers");
-    writeFile(SD, CSV_BMU_package, CSV_BMU_HEADER);
+  
+  if (!SD.exists(CSV_AMS_filename)) {
+    Serial.println("Create AMS Master log file success");
+    writeFile(SD, CSV_AMS_filename, CSV_AMS_HEADER);
   } else {
     Serial.println("Log file exists, appending data");
   }
-
-  if (!SD.exists(CSV_AMS_package)) {
-    Serial.println("Creating 1stFloor log file with headers");
-    writeFile(SD, CSV_AMS_package, CSV_AMS_HEADER);
-  } else {
-    Serial.println("Log file exists, appending data");
+  
+  char CSV_BMU_package[10];  // Buffer for filename (max: "8.csv" → ~6 bytes needed, 15 for safety)
+  // Create 8 file of BMU_Package
+  for(int i=0; i<BMU_NUM;i++) {
+    snprintf(CSV_BMU_package, sizeof(CSV_BMU_package), "%s%d.csv", CSV_AMS_filename, i);
+    if (!SD.exists(CSV_BMU_package)) {
+      Serial.println("Create BMU Cells log success");
+      writeFile(SD, CSV_BMU_package, CSV_BMU_HEADER);
+    } else {
+      Serial.println("Log file exists, appending data");
+    }
   }
-  */
-
+  
     Serial.println("BCU__initialized__"); 
 }
 
@@ -225,16 +215,16 @@ void loop(){
 // Check if Charger LV AUX plug is actually into ACCUM 2nd Floor connector (May change to external interrupt)
   (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
   CHARGER_PLUGGED = false;
-
+  AMS_Package.OBC_connect = CHARGER_PLUGGED;
+// twaiTroubleshoot();
 /*___Task 1 : Communication ====================================================*/
-  // ------------------------------------Message Transmission
-  
   // BCU CMD & SYNC   (100ms cycle Broadcast to all BMU modules in Bus) 
   if (CAN_SEND_FLG1)
   {
     CAN_SEND_FLG1 = 0; // reset
-    packBCUmsg(&sendMessage, SYNC_TIME , CHARGER_PLUGGED);
+    packAMSmsg(&sendMessage, SYNC_TIME , CHARGER_PLUGGED);
     twai_transmit(&sendMessage, 1);
+    // Serial.println(1);
   } 
   if(CAN_SEND_FLG2 && CHARGER_PLUGGED)
   {
@@ -243,11 +233,9 @@ void loop(){
     // **NOTE** 3rd to 5th Parameter will be updated via unpackBMUmsgtoAMS(); function
     twai_transmit(&J1939msg, 1);
   }
- 
-  // Back up plan , (Also send additional message on read sensors data too , [raw format , no merge , nothing])
+//------------------------------------CANRX
 
-//------------------------------------Message Reception
-
+  //-------- Normal Receiving
   if (twai_receive(&receivedMessage, 1) == ESP_OK) 
   {
     // debugFrame();
@@ -262,9 +250,10 @@ void loop(){
     CAN_TIMEOUT_FLG = false;
     communication_timer1 = millis();
   }
-  // if No module is connected from CAN bus , run this code and return until the bus is active
+  //-------- Case of AMS is disconnected from CAN Bus
   else if (currentMillis - communication_timer1 >= DISCONNENCTION_TIMEOUT){
-    // Shutdown
+    // Loop the Shutdown state until the CAN Bus is active again
+    digitalWrite(AMS_OUT,LOW);
     if( currentMillis - shutdown_timer1 >= 400 ){
         Serial.println("NO_BYTE_RECV");
         shutdown_timer1 = millis();
@@ -277,40 +266,36 @@ void loop(){
     return;
   }
 
-  // In case if any module disconnect
+  //-------- Case of Any BMU module disconnected from CAN Bus
   if(checkModuleDisconnect(BMU_Package) == 0){
-    // Shutdown and return immediately
+    // Loop the Shutdown state until the all BMU Modules are connected
     digitalWrite(AMS_OUT,LOW);
     if( currentMillis - shutdown_timer1 >= 400 ){
-        Serial.println("MODULE_DISCONNECT -- SHUTDOWN");
-        Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
-        Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
-        Serial.printf("BMU3 connect: %d ",BMU_Package[2].BMUconnected);
-        Serial.printf("BMU4 connect: %d \n",BMU_Package[3].BMUconnected);
+
+      Serial.println("MODULE_DISCONNECT -- SHUTDOWN");
+      for(int i=0; i < BMU_NUM ; i++ ){
+        Serial.printf("BMU %d connection: ", i);
+        Serial.printf("%d\n",BMU_Package[i].BMUconnected);
+
+      }
+        // Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
+        // Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
         shutdown_timer1 = millis();
     }
     return;
   }
   
 
-  /*___Task 2 : Determine AMS_OK relay state ==================================================== */
+/*___Task 2 : Determine AMS_OK relay state ==================================================== */
     
-    // Fault Table , OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
-    
-    // Assure Critical Voltage Fault Determined From BMU match with actual Accumulator voltage
-    ( (AMS_Package.ACCUM_VOLTAGE > ACCUM_MAXVOLTAGE) || (AMS_Package.OVERVOLT_CRITICAL) ) 
+    // Fault Table, OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
+    ( (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) || (AMS_Package.OVERVOLT_CRITICAL) ) 
               ? (OVER_VOLT_CRIT = 1) : (OVER_VOLT_CRIT = 0) ;
-    ( (AMS_Package.ACCUM_VOLTAGE < ACCUM_MINVOLTAGE) || (AMS_Package.LOWVOLT_CRITICAL) ) 
+    ( (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) || (AMS_Package.LOWVOLT_CRITICAL) ) 
               ? (LOW_VOLT_CRIT = 1) : (LOW_VOLT_CRIT = 0);
     ( AMS_Package.OVERTEMP_CRITICAL > 0 ) ? (OVER_TEMP_CRIT = 1): (OVER_TEMP_CRIT = 0);
-    
-    // The rest are already determined by recalculateAMSPackage()
 
-    /* สำหรับ Test ลอย ไม่ต่อ แบต */
-    // (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) ? (AMS_Package.OVERVOLT_CRITICAL = 1) : (AMS_Package.OVERVOLT_CRITICAL = 0) ;
-    // (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) ? (AMS_Package.LOWVOLT_CRITICAL = 1) : (AMS_Package.LOWVOLT_CRITICAL = 0);
-
-    // Dashboard light: LowVoltage , Module OverTemperature , Full Voltage
+    // Dashboard light & Steering wheel display: LowVoltage, Module OverTemperature, Full Voltage
     ( (AMS_Package.ACCUM_VOLTAGE <= 1.10 * ACCUM_MINVOLTAGE) || (AMS_Package.LOWVOLT_WARNING) ) 
               ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
     ( (AMS_Package.OVERTEMP_WARNING > 0) || (AMS_Package.OVERTEMP_WARNING) ) 
@@ -318,12 +303,17 @@ void loop(){
     ( AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE || (AMS_Package.OVERVOLT_WARNING) ) 
               ? (ACCUM_FULL = 1) : (ACCUM_FULL = 0) ;
 
+      // OVER_TEMP_CRIT = 0;
+      // OVER_TEMP_WARN = 0;
+      // OVER_VOLT_CRIT = 0;
+      // OVER_VOLT_WARN = 0;
+
     // Fault Condition for AMS_OK Shutdown
     bool ACCUMULATOR_Fault;
     ACCUMULATOR_Fault = OVER_VOLT_CRIT | LOW_VOLT_CRIT | OVER_TEMP_CRIT;
     (ACCUMULATOR_Fault > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
-    
-    /*------- Coordiante BMU cell Balancing with OBC ------------*/
+    AMS_OK = 1 ;
+/*------- Coordiante BMU cell Balancing with OBC ------------*/
     if(CHARGER_PLUGGED)
     {
       uint16_t OBCFault = OBC_Package.OBCstatusbit; // 5 bit I think?
@@ -336,18 +326,15 @@ void loop(){
       ((ACCUMULATOR_Fault | OBCFault) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
     }
      
-  /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
-    
+/* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
     // For Active High Switch (Butterfly board)
     (AMS_OK) ? digitalWrite(AMS_OUT,HIGH) : digitalWrite(AMS_OUT,LOW);
     
     // // For Active Low switch (Yss Blackboard)
     // (AMS_OK) ? digitalWrite(AMS_OUT,LOW) : digitalWrite(AMS_OUT,HIGH);
     
-    (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
-    (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
-    // processSensorsData();
-    // Append sensors data to LVsignal struct 
+    // (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
+    // (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
 
     // Debug AMS state
     if(currentMillis - reference_time >= SYNC_TIME) {
@@ -355,24 +342,12 @@ void loop(){
       Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
       Serial.printf("AMS_MAX: %f \n", AMS_Package.ACCUM_MAXVOLTAGE);
       Serial.printf("AMS_MIN: %f \n", AMS_Package.ACCUM_MINVOLTAGE);
-      Serial.printf("OV_CRIT: %d \n", AMS_Package.OVERVOLT_CRITICAL);
-      Serial.printf("LV_CRT: %d \n", AMS_Package.LOWVOLT_CRITICAL);
-      Serial.printf("OVT_CRT: %d \n", AMS_Package.OVERTEMP_CRITICAL);
+      Serial.printf("OV_CRIT: %d \n", OVER_VOLT_CRIT);
+      Serial.printf("LV_CRT: %d \n", LOW_VOLT_CRIT);
+      Serial.printf("OVT_CRT: %d \n", OVER_TEMP_CRIT);
 
-      // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
-      // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
-      
-      // Serial.printf("AIRplus: %c \n", SDC_Signal_Board.AIRplus);
-      // Serial.printf("IMD_Relay: %c \n", SDC_Signal_Board.IMD_Relay);
-      // Serial.printf("BSPD_Relay: %c \n", SDC_Signal_Board.BSPD_Relay);
-      // Serial.printf("Emergency Button: %c \n", SDC_Signal_Board.BSPD_Relay);
-
-      // Serial.printf("BrakePressure1: %2f \n", SDC_Signal_Board.BrakePressure1);
-      // Serial.printf("BrakePressure2: %2f \n", SDC_Signal_Board.BrakePressure2);
-      // Serial.printf("AccelPedal1: %2f \n", SDC_Signal_Board.AccelPedal1);
-      // Serial.printf("AccelPedal2: %2f \n", SDC_Signal_Board.AccelPedal2);
-      // Serial.printf("Current_Sense: %2f \n", SDC_Signal_Board.CurrentSense);
-
+      Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
+      Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
       // 2nd one is connected to dummy test kit
       // debugBMUmsg(0);
       // debugBMUFault(0);
@@ -380,41 +355,53 @@ void loop(){
       reference_time= millis();
     }
 
-    
+/* --------------------------- SDlogger FUnction calls */
 
-
-  /* --------------------------- SDlogger FUnction calls
-    // Log data Every 200 ms
+    // Log data Every 1000 ms
     if (currentMillis - lastlogtime  >= LOG_INTERVAL_MS) {
-      lastlogtime = currentMillis;
+
+      // Mock Data For headless logging
+      // BMU_Package[0].bmu_id = 0x211;
+      // BMU_Package[0].V_CELL[0] = 42;
+      // BMU_Package[0].V_CELL[1] = 42;
+      // BMU_Package[0].V_CELL[2] = 42;
+      // BMU_Package[0].V_CELL[3] = 42;
+      // BMU_Package[0].V_CELL[4] = 42;
+      // BMU_Package[0].V_CELL[5] = 42;
+      // BMU_Package[0].V_CELL[6] = 42;
+      // BMU_Package[0].V_CELL[7] = 42;
+      // BMU_Package[0].V_MODULE;
+      // BMU_Package[0].DV = 2;
+      // BMU_Package[0].OVERVOLTAGE_CRITICAL = 255;
+      // BMU_Package[0].OVERVOLTAGE_WARNING = 255;
+      // BMU_Package[0].LOWVOLTAGE_CRITICAL = 255;
+      // BMU_Package[0].LOWVOLTAGE_WARNING = 255;
+      // BMU_Package[0].OVERTEMP_CRITICAL = 255;
+      // BMU_Package[0].OVERTEMP_WARNING = 255;
+      // BMU_Package[0].OVERDIV_VOLTAGE_CRITICAL = 255;
+      // BMU_Package[0].OVERDIV_VOLTAGE_WARNING = 255;
+      // BMU_Package[0].BMUconnected=1;
+      // BMU_Package[0].BMUreadytoCharge = 0;
+
+      lastlogtime = currentMillis; 
+
       // Log all BMU_Package
-      for(int i =0; i < BMU_NUM ; i++) 
-        log1stFloordata(i);
-      // Log AMS_Package
-      log2ndFloordata();
-      // batteryData.dataUpdated = false;  // Reset flag until next update
+      for(int i =0; i < BMU_NUM ; i++){
+        logBMUdata(i);
+      } 
+        // Log AMS_Package
+      logAMSmasterdata();
     }
-      
-    // Print stats periodically
-    if (currentMillis - lastStatTime >= 10000) { // Every 10 seconds
-      lastStatTime = currentMillis;
-      getSDsize();
-      // get some ...
-    }
-  
-  */
 } 
 
 /* ==================================Main Local Functions==============================*/
-
-
 
 bool isModuleActive(int moduleIndex); // Check the latest response from each module
 void resetModuleData(int moduleIndex); // Reset that Module struct if !ismoduleActive
 void packing_AMSstruct (int moduleIndex); // recalculate data to AMS struct in sync with number of Active BMU
 void dynamicModulereset(BMUdata *BMU_Package);
 
-void packBCUmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged) {
+void packAMSmsg ( twai_message_t *BCUsent, uint16_t Sync_time,  bool &is_charger_plugged) {
 
   BCUsent->identifier  = BCU_ADD; // BCU ID
   BCUsent->data_length_code = 8;
@@ -589,7 +576,6 @@ void resetAllStruct(){
     lastModuleResponse[i] = 0;
   }
   AMS_Package = AMSdata();
-  Signal_Package = LVsignal();
   OBC_Package = OBCdata();
 }
 bool checkModuleDisconnect(BMUdata *BMU_Package){
@@ -610,22 +596,9 @@ void dynamicModulereset(BMUdata *BMU_Package){
   }
 }
 
-void processSensorsData(){
-  // Read SDC output signal to AIR+
-  Signal_Package.AIRplus = digitalRead(SDCIN);
-  Signal_Package.IMD_Relay = digitalRead(IMDIN);
-  Signal_Package.BSPD_Relay = digitalRead(BSPDIN);
-  Signal_Package.EMERGENCY_BUTTON = digitalRead(EMR_O);
 
-  Signal_Package.BrakePressure1 = analogRead(BPS1) * 3.3/4095;
-  Signal_Package.BrakePressure2 = analogRead(BPS2) * 3.3/4095;
-  Signal_Package.AccelPedal1 = analogRead(APS1)* 3.3/4095;
-  Signal_Package.AccelPedal2 = analogRead(APS2)* 3.3/4095;
-  Signal_Package.CurrentSense = analogRead(CURR)* 3.3/4095;  
-
-}
 /* ==================================Serial Debugger==============================*/
-// Use Non-Block string , there's literally no perfect way to Serial Debug asynchronusly
+// It will block CAN communication , use it very minimally
 void debugFrame(){
   Serial.printf("%X\n", receivedMessage.identifier);
   for (int i = 0; i < receivedMessage.data_length_code; i++) 
@@ -714,11 +687,11 @@ void debugOBCmsg(){
 void twaiTroubleshoot(){
   //Debug and troubleshoot TWAI bus
   /*
-      TWAI_ALERT_RX_DATA        0x00000004    Alert(4)    : A frame has been received and added to the RX queue
-      TWAI_ALERT_ERR_PASS       0x00001000    Alert(4096) : TWAI controller has become error passive
-      TWAI_ALERT_BUS_ERROR      0x00000200    Alert(512)  : A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus
-      TWAI_ALERT_RX_QUEUE_FULL  0x00000800    Alert(2048) : The RX queue is full causing a frame to be lost
-      */
+  TWAI_ALERT_RX_DATA        0x00000004    Alert(4)    : A frame has been received and added to the RX queue
+  TWAI_ALERT_ERR_PASS       0x00001000    Alert(4096) : TWAI controller has become error passive
+  TWAI_ALERT_BUS_ERROR      0x00000200    Alert(512)  : A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus
+  TWAI_ALERT_RX_QUEUE_FULL  0x00000800    Alert(2048) : The RX queue is full causing a frame to be lost
+  */
   //Error Alert message
   uint32_t alerts_triggered;
   twai_status_info_t status_info;
@@ -730,22 +703,23 @@ void twaiTroubleshoot(){
 }
 
 
-/* --------- Seriallize Specific Message of CAN data (Should be a method inside the struct , but it's alright) */
 
-/*
-Which function should be a method to the
-- Pack 
-- Unpack 
 
-*/
 
-void log1stFloordata(int moduleindex) {
+void logBMUdata(int moduleindex) {
   int &i = moduleindex;
   unsigned long timestamp = millis();
 
-  char dataString1[100];
-  // right now 17
-  sprintf(dataString1, "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u," , 
+  // Create filename for the specific BMU module
+  char CSV_BMU_package[15];
+  snprintf(CSV_BMU_package, sizeof(CSV_BMU_package), "/bmu%d.csv", i);
+  
+  // Create a single data string that includes both module data and cell voltages
+  char dataString[200];  // Increased buffer size to accommodate all data
+  
+  // Format the first part of the data (module information)
+  int offset = snprintf(dataString, sizeof(dataString), 
+          "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,",
           timestamp, 
           BMU_Package[i].bmu_id, 
           BMU_Package[i].V_MODULE,
@@ -762,68 +736,112 @@ void log1stFloordata(int moduleindex) {
           BMU_Package[i].OVERTEMP_CRITICAL,
           BMU_Package[i].OVERTEMP_WARNING,
           BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL,
-          BMU_Package[i].OVERDIV_VOLTAGE_WARNING
-        );
-      // THe actual size is 50 , but * 2 for fail safe
-
-  // Second set of dataString hold cells data
-  char dataString2[CELL_NUM];  
-  int offset = 0;  // Track write position
-
-  for(int j = 0; j < 10; j++) {
-      char voltage = BMU_Package[i].V_CELL[j];
-      offset += snprintf(dataString2 + offset, sizeof(dataString2) - offset, "%u,", voltage);
+          BMU_Package[i].OVERDIV_VOLTAGE_WARNING);
+  
+  // Add cell voltage data to the same string
+  for(int j = 0; j < CELL_NUM; j++) {
+      offset += snprintf(dataString + offset, sizeof(dataString) - offset, "%u%s", 
+                         BMU_Package[i].V_CELL[j], 
+                         (j < CELL_NUM - 1) ? "," : "\n");  // Add comma between values, newline at end
   }
-
-  // Replace last comma as \n line break
-  if (offset > 0){
-    dataString2[offset - 1] = '\n';
-  } 
-        
-  // Log both data string to SD card
-  appendFile(SD, CSV_BMU_package, dataString1);
-  appendFile(SD, CSV_BMU_package, dataString2);
+  
+  // Log the combined data string to SD card
+  appendFile(SD, CSV_BMU_package, dataString);
   logCount++;
 }
 
-void log2ndFloordata(){
+void logAMSmasterdata(){
 
-unsigned long timestamp = millis();
+  byte date = 0;
+  unsigned long timestamp = millis();
 
-char dataString[100];
-sprintf(dataString, "%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", 
-        timestamp, 
-        Signal_Package.AccelPedal1 ,
-        Signal_Package.AccelPedal2 ,
-        Signal_Package.BrakePressure1,
-        Signal_Package.BrakePressure2,
-        Signal_Package.CurrentSense,
-        Signal_Package.BSPD_Relay,
-        Signal_Package.IMD_Relay,
-        Signal_Package.AIRplus,
-        Signal_Package.EMERGENCY_BUTTON,
-        Signal_Package.OBC_AUX_INPUT,
-        Signal_Package.Temperature_warning_led,
-        Signal_Package.lowvoltage_warning_led,
-        AMS_Package.AMS_OK,
-        AMS_Package.ACCUM_VOLTAGE,
-        AMS_Package.OVERVOLT_CRITICAL,
-        AMS_Package.OVERVOLT_WARNING,
-        AMS_Package.LOWVOLT_CRITICAL,
-        AMS_Package.LOWVOLT_WARNING,
-        AMS_Package.OVERTEMP_CRITICAL,
-        AMS_Package.OVERTEMP_WARNING,
-        AMS_Package.OVERDIV_CRITICAL,
-        AMS_Package.OVERDIV_WARNING
-      );
+  char dataString[200];
+  sprintf(dataString, "%u,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", 
+          date,
+          timestamp, 
+          AMS_Package.OBC_connect,
+          AMS_Package.AMS_OK,
+          AMS_Package.ACCUM_VOLTAGE,
+          AMS_Package.OVERVOLT_CRITICAL,
+          AMS_Package.OVERVOLT_WARNING,
+          AMS_Package.LOWVOLT_CRITICAL,
+          AMS_Package.LOWVOLT_WARNING,
+          AMS_Package.OVERTEMP_CRITICAL,
+          AMS_Package.OVERTEMP_WARNING,
+          AMS_Package.OVERDIV_CRITICAL,
+          AMS_Package.OVERDIV_WARNING
+        );
   
   // Log to SD card
-  appendFile(SD, CSV_AMS_package, dataString);
+  appendFile(SD, CSV_AMS_filename, dataString);
   logCount++;
 }
 
 // Future update
 
-// void logOBC(){
+/* --------- Seriallize Specific Message of CAN data (Should be a method inside the struct , but it's alright) */
+/*
+Which function should be a method to the AMS struct ??
+- Process (receive pointer of canframe)
+- Does recalculateAMS needs to be its struct method? , and then in BMUstruct function I will refers to it as
+- Serialize function (turns struct to array in order according to https://mailkmuttacth-my.sharepoint.com/:x:/g/personal/natdanai_chin_kmutt_ac_th/ETZwCgSxlotOhV5ipbpc344BHxdTpfmnB7tHgcA94s3oEA?e=hDd82Y )
+*/
 
+// ไม่ได้ละอันนี้ต้อง log เป็น module ละไฟล์เลย
+// ต้องใช้ sprintf เพื่อ append i เข้าไปใน string ของ ชื่อไฟล์
+
+// void log1stFloordata(int moduleindex) {
+//   int &i = moduleindex;
+//   // char timestamp[13];
+//   // char date[13];
+//   // RTC_formatTime(dt, timestamp, (sizeof(timestamp) / sizeof(timestamp[0])));
+//   // RTC_formatDate(dt,date, (sizeof(date) / sizeof(date[0])));
+//   unsigned long timestamp = millis();
+
+//   char dataString1[200];
+
+//   sprintf(dataString1, "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,",
+//           timestamp, 
+//           BMU_Package[i].bmu_id, 
+//           BMU_Package[i].V_MODULE,
+//           BMU_Package[i].TEMP_SENSE[0], 
+//           BMU_Package[i].TEMP_SENSE[1], 
+//           BMU_Package[i].DV, 
+//           BMU_Package[i].BMUconnected,
+//           BMU_Package[i].BMUreadytoCharge,
+//           BMU_Package[i].BalancingDischarge_Cells,
+//           BMU_Package[i].OVERVOLTAGE_CRITICAL,
+//           BMU_Package[i].OVERVOLTAGE_WARNING,
+//           BMU_Package[i].LOWVOLTAGE_CRITICAL,
+//           BMU_Package[i].LOWVOLTAGE_WARNING,
+//           BMU_Package[i].OVERTEMP_CRITICAL,
+//           BMU_Package[i].OVERTEMP_WARNING,
+//           BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL,
+//           BMU_Package[i].OVERDIV_VOLTAGE_WARNING
+//         );
+//       // THe actual size is 50 , but * 2 for fail safe
+
+//   // Second set of dataString hold cells data
+//   char dataString2[CELL_NUM];  
+//   int offset = 0;  // Track write position
+
+//   for(int j = 0; j < CELL_NUM; j++) {
+//       char voltage = BMU_Package[i].V_CELL[j];
+//       offset += snprintf(dataString2 + offset, sizeof(dataString2) - offset, "%u,", voltage);
+//   }
+
+//   // Replace last comma as \n line break
+//   if (offset > 0){
+//     dataString2[offset - 1] = '\n';
+//   } 
+  
+//   // Change BMUpackage filename to fit the BMU Module number
+//   char CSV_BMU_package[15];  // Buffer for filename (max: "8.csv" → ~6 bytes needed, 15 for safety)
+
+//   snprintf(CSV_BMU_package, sizeof(CSV_BMU_package), "/bmu%d.csv", i);
+
+//   // Log both data strings to SD card
+//   appendFile(SD, CSV_BMU_package, dataString1);
+//   appendFile(SD, CSV_BMU_package, dataString2);
+//   logCount++;
 // }

@@ -27,7 +27,8 @@ uint16_t toUint16FromBitarrayLSB(const bool *bitarr);
 
 // Default configuration of AMS
 #define CELL_NUM 10
-#define BMU_NUM 6 // Demo config
+#define BMU_NUM 2 
+// #define BMU_NUM 0 // Headless config
 /*Amita Battery*/
 #define VMAX_CELL 4.2
 #define VMIN_CELL 3.2
@@ -39,12 +40,12 @@ uint16_t toUint16FromBitarrayLSB(const bool *bitarr);
 // AMS Communication
 // #define STANDARD_BIT_RATE 250E3
 #define DISCONNENCTION_TIMEOUT 650
-#define BCU_ADD 0x7FF
+#define BCU_ADD 0x00
 #define OBC_ADD 0x1806E5F4
 
 struct BMUdata {
   // Basic BMU Data
-  uint32_t bmu_id = 0x00;
+  uint32_t bmu_id = 0x00; 
   uint8_t V_CELL[CELL_NUM] = {0};
   uint8_t TEMP_SENSE[TEMP_SENSOR_NUM] = {0};
   uint8_t V_MODULE = 0;
@@ -70,8 +71,8 @@ struct AMSdata {
   float ACCUM_VOLTAGE = 0.0; 
   float ACCUM_MAXVOLTAGE = (VMAX_CELL * CELL_NUM * BMU_NUM); // Default value
   float ACCUM_MINVOLTAGE = (VMIN_CELL * CELL_NUM * BMU_NUM); // Defualt value assum 8 module
-  // float ACCUM_MAXVOLTAGE = (0); // Default value
-  // float ACCUM_MINVOLTAGE = (0); // Defualt value assum 8 module
+  // float ACCUM_MAXVOLTAGE = (0); // For headless test
+  // float ACCUM_MINVOLTAGE = (0); // For headless test
   bool ACCUM_CHG_READY = 0;
 
   bool OVERVOLT_WARNING = 0;
@@ -84,6 +85,8 @@ struct AMSdata {
   bool OVERTEMP_CRITICAL = 0;
   bool OVERDIV_CRITICAL = 0;
 
+  
+  bool OBC_connect = 0;
   // bool AMS_OK = 0; // Use this for Active Low Output
   bool AMS_OK = 1; // Use this for Active High Output
 };
@@ -97,23 +100,6 @@ struct OBCdata {
 };
 
 
-// Physical condition of SDC and LV Circuit
-struct LVsignal {
-  bool AIRplus = 1; // AIR+
-  bool IMD_Relay = 1; // IMD_OUT
-  bool BSPD_Relay = 1; // BSPD_OUT
-  bool EMERGENCY_BUTTON = 1;
-  bool OBC_AUX_INPUT = 0;
-  bool Temperature_warning_led = 0;
-  bool lowvoltage_warning_led = 0;
-
-  // BSPDADCreadingStatus
-  uint16_t BrakePressure1;
-  uint16_t BrakePressure2;
-  uint16_t AccelPedal1;
-  uint16_t AccelPedal2;
-  uint16_t CurrentSense;
-};
 
 //==================================================== CAN bus Methods
 

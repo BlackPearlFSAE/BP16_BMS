@@ -73,7 +73,9 @@ In this sketch book:
 #include <stdint.h>
 #include <SPI.h>
 #include <EEPROM.h>
+// #include <CAN.h>
 #include <mcp2515.h>
+// #include <mcp_can.h>
 #include "Linduino.h"
 #include "LT_SPI.h"
 #include "LT_I2C.h"
@@ -81,8 +83,7 @@ In this sketch book:
 #include "UserInterface.h"
 #include "LTC681x.h"
 #include "LTC6811.h"
-// #include <_util_AMS.h>
-// include <_util_SD.h>
+#include "ams_config.h"
 
 /************************* Defines *****************************/
 #define ENABLED 1
@@ -154,7 +155,7 @@ const uint8_t CELL_PER_IC = 12;
 //variable for packCANData
 bool timeOut = 0;
 bool charging = 0;
-bool balanceActive = 0;
+bool balanceActive = 0;   
 bool voltFull = 0; 
 float temp1,temp2;
 float vbatt;
@@ -188,12 +189,18 @@ unsigned long previousMill3 = 0;// for discharging
 unsigned long previousMill4 = 0;
 unsigned long previousMill5 = 0;// for sending 45 (charging)
 unsigned long previousMill6 = 0;// for receiving BCU message
+unsigned long previousMill7 = 0;// for debug all
 unsigned long actual;
-const long interval = 200;//for message 123
-const long intervalFault = 500;// for message 45
-const long intervalDis = 3000;// for discharging
-const long intervalClear = 3000;// for clearDischarging
+const long interval = 100;//for message 123 200ms
+const long intervalD = 200;//for message 123 discharge 200ms
+
+const long intervalFault = 400;// for message 45 500ms
+const long intervalFaultD = 500;// for message 45 discharge 500ms
+
+const long intervalDis = 1000;// for discharging
+const long intervalClear = 1000;// for clearDischarging (can set for how long discharge time would be)
 const long intervalReceive = 100;// for receiving from BCU 
+const long intervalBig = 100;// controls frequency time of reading 
 unsigned long dischargeStartTime = 0;
 bool isDischarge = false;
 
@@ -202,8 +209,6 @@ unsigned long www = 0;
 // int int= 0;
 
 uint16_t balanceStatus;
-
-
 
 
 uint8_t fault;
@@ -291,7 +296,7 @@ float cell_voltage[TOTAL_IC][CELL_PER_IC];
 int totalCell = 10;
 
 // float fakeCell[10] = {3.6,3.4,3.5,3.8,3.8,4.1,3.7,3.6,3.5,3.4};
-float fakeCell[10] = {3.6,3.7,3.6,3.6,3.6,3.6,3.6,3.7,3.6,3.6};
+float fakeCell[10] = {3.7,3.7,3.7,3.7,3.7,3.7,3.7,3.7,3.94,3.94};
 uint8_t keepCell[10] = {};
 
 // int idModule[8] = {{0x211,0x212,2}};
@@ -317,14 +322,14 @@ void setup()
 
   wakeup_sleep(TOTAL_IC);
   LTC6811_wrcfg(TOTAL_IC, BMS_IC);
-  
-  selectId(6);// for selecting id for each module.
+      
+  selectId(1);// for selecting id for each module.
 
   while (!Serial);
   Serial.begin(115200);
   
   mcp2515.reset();
-  mcp2515.setBitrate(CAN_500KBPS,MCP_8MHZ);
+  mcp2515.setBitrate(CAN_250KBPS,MCP_8MHZ);
   mcp2515.setNormalMode();
 
   
@@ -390,12 +395,13 @@ void loop()
       // extractCAN();
     }
       measurement_loop(DATALOG_DISABLED, timeOut, sync, charging, balanceActive, voltFull);
+      // delay(1000); 
     
-    // delay(100);
 
   }
 
-
+  temp1 = getTemp(A0);
+  temp2 = getTemp(A3);
   getCellVoltage();
   float cAv=0;
   float sumBat = sumCell(10);
@@ -405,75 +411,114 @@ void loop()
  
   int count = 0;
   int countDis = 0;
-
+  
   // if(current - previousMill3 >= intervalDis){
   //   previousMill3 = current;
   //   // clearDischarge();
   //   Serial.println("RWADWA");
-  //   // dischargeStartTime = current;
+  //   // dischargeStartTime `+= current;
   //   // delay(4000);
   // }
-  Serial.print("charging : ");Serial.println(charging);
-    if(stateC == 0){
-      if(current-previousMill3 >= intervalDis){
-        Serial.println("inside dww");
-        previousMill3 = current;
+  if(current-previousMill7>=intervalBig){
+    previousMill7 = current;
+    Serial.print("stateC : ");Serial.println(stateC);
+    // Serial.print("previousMill7 : ");Serial.println(previousMill7);
+    Serial.print("charging : ");Serial.println(charging);
+      if(stateC == 0){
+        if(current-previousMill3 >= intervalDis){  //for discharging 
+          Serial.println("inside dww");
+          previousMill3 = current;
+          previousMill4 = current;
+          for(int i = 0;i<=totalCell;i++){
+            cellVoltage = BMS_IC[0].cells.c_codes[i] * 0.0001;
+            Serial.print("cell ");Serial.print(i);Serial.print(": ");Serial.print(cellVoltage);Serial.println();
+            if(cellVoltage-cAv > 0.2){
+              // fakeCell[i] = fakeCell[i] - 0.01; for testing 
+              Serial.print("i : ");Serial.println(i);
+              Serial.print("Cell : ");Serial.println(cellVoltage);
+              Serial.print("cAv : ");Serial.println(cAv);
+              Serial.print("divVolt : ");Serial.println(cellVoltage - cAv);
+              // discharge(i);
+              balanceStatus |= (1 << (i));
+              Serial.print("balanceStatus : ");
+              for (int i=0;i<10;i++){
+                Serial.print((balanceStatus >> 9-i)&1);
+              }
+              Serial.println();
+              // Serial.print("KeepCell : ");Serial.println(keepCell[count]);
+              // Serial.print("Count : ");Serial.println(count);
+              // Serial.print("Countdis : ");Serial.println(countDis);
+              keepCell[count] = i;
+              count++;
+              countDis++;
+              checkDis=0;
+  
+  
+              // delay(2000);
+           }   
+          }
+          stateC = 1;
+          Serial.println("----------------");
+        }
+      }
+  
+    // for debugging purpose & clearDischarge
+    if(stateC == 1){
+      if(current - previousMill4 >= intervalClear){
         previousMill4 = current;
-        for(int i = 1;i<=totalCell;i++){
-          cellVoltage = BMS_IC[0].cells.c_codes[i-1] * 0.0001;
-          Serial.print("cell ");Serial.print(i);Serial.print(": ");Serial.print(cellVoltage);Serial.println();
-          if(cellVoltage-cAv >= 0.2){
-
-            Serial.print("i : ");Serial.println(i);
-            Serial.print("Cell : ");Serial.println(cellVoltage);
-            // Serial.print("cAv : ");Serial.println(cAv);
-            // Serial.print("divVolt : ");Serial.println(cellVoltage - cAv);
-            discharge(i);
-            balanceStatus |= (1 << (i-1));
-            // Serial.print("KeepCell : ");Serial.println(keepCell[count]);
-            // Serial.print("Count : ");Serial.println(count);
-            // Serial.print("Countdis : ");Serial.println(countDis);
-            keepCell[count] = i;
-            count++;
-            countDis++;
-            checkDis=0;
-
-
-            // delay(2000);
-        }   
+        // Serial.print("previousMill4 : ");Serial.println(previousMill4);
+        Serial.print("checkDis");Serial.println(checkDis); 
+        Serial.print("keepCellCount : ");Serial.println(keepCell[count]);    
+  
+        for(int i =0;i<totalCell;i++){
+          Serial.print((balanceStatus >> i)& 1);
+        }
+        Serial.println(countDis);
+        clearDischarge(); 
+        checkDis = 1;
+        // Serial.println("------------");
+        // if(countDis >= 1){
+        //   if(current - dischargeStartTime >= 4000){  
+        //     Serial.println("after 4");
+        //   }
+        // }
+        stateC = 0;
       }
-      stateC = 1;
-      Serial.println("----------------");
     }
-  }
-
-  // for debugging purpose & clearDischarge
-  if(stateC == 1){
-    if(current - previousMill4 >= intervalClear){
-      previousMill4 = current;
-      Serial.print("checkDis");Serial.println(checkDis); 
-      Serial.print("keepCellCount : ");Serial.println(keepCell[count]);    
-
-      for(int i =0;i<totalCell;i++){
-        Serial.print((balanceStatus >> i)&0x01);
+  
+  
+  
+    //debugging for package 123
+    if(current - previousMill >= interval){
+      previousMill = current;
+      packCANData(sync,timeOut,charging,balanceActive,voltFull,balanceStatus,vbatt,deltaV,temp1,temp2);
+      packCANData2();
+      sendCANFrame3();
+      balanceStatus &= (0xff);
+      Serial.print("balanceStatus : ");
+      for (int i=0;i<10;i++){
+        Serial.print((balanceStatus >> 9-i)&1);
       }
-      // Serial.println(countDis);
-      clearDischarge(); 
-      checkDis = 1;
-      // Serial.println("------------");
-      // if(countDis >= 1){
-      //   if(current - dischargeStartTime >= 4000){  
-      //     Serial.println("after 4");
-      //   }
-      // }
-      stateC = 0;
+      Serial.println();
     }
-    packCANData(sync,timeOut,charging,balanceActive,voltFull,balanceStatus,vbatt,deltaV,temp1,temp2);
-    packCANData2();
-    sendCANFrame3();
+  
+    //debugging for package 45
+    if(current - previousMill2 >= intervalFault){
+      previousMill2 = current;
+      for (int e =0; e<10;e++){
+        cellVoltage = BMS_IC[0].cells.c_codes[e] * 0.0001;
+        packCANFrame45(cellVoltage,temp1,e, maxVolt, minVolt);
+        // debugFault(4,0);
+        // debugFault(4,1);
+        // debugFault(4,2);
+        // debugFault(4,3);
+      }
+    
+      sendCANFrame45();
+  
+    }
+
   }
-
-
 
 
     // if(current - previousMill2 >= intervalDis){
@@ -993,7 +1038,7 @@ void getCellVoltage(){
   wakeup_idle(TOTAL_IC);
   error = LTC6811_rdcv(SEL_ALL_REG, TOTAL_IC, BMS_IC);
   check_error(error);
-  print_cells(DATALOG_DISABLED);
+  // print_cells(DATALOG_DISABLED);
   deselect_LTC6811();
 
   
@@ -1033,6 +1078,7 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
       select_LTC6811();
       wakeup_idle(TOTAL_IC);
       LTC6811_adcv(ADC_CONVERSION_MODE, ADC_DCP, CELL_CH_TO_CONVERT);
+      delay(20);
       LTC6811_pollAdc();
       wakeup_idle(TOTAL_IC);
       error = LTC6811_rdcv(SEL_ALL_REG, TOTAL_IC, BMS_IC);
@@ -1081,7 +1127,7 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
 
 
       //pack & send CAN 1st message
-      if(current-previousMill >= interval){
+      if(current-previousMill >= intervalD){
         previousMill = current;
         // Serial.print("maxVolt : ");Serial.println(maxVolt);
         packCANData(sync,timeOut,charging,balanceActive,voltFull,balanceStatus,vbatt,deltaV,temp1,temp2);
@@ -1111,18 +1157,18 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
       // }
       
       
-      for (int e =0; e<10;e++){
-        cellVoltage = BMS_IC[0].cells.c_codes[e] * 0.0001;
-        packCANFrame45(cellVoltage,temp1,e, maxVolt, minVolt);
-        // debugFault(4,0);
-        // debugFault(4,1);
-        // debugFault(4,2);
-        // debugFault(4,3);
-        
-      }
       
-      if(current - previousMill2 >= intervalFault){
+      if(current - previousMill2 >= intervalFaultD){
         previousMill2 = current;
+        for (int e =0; e<10;e++){
+          cellVoltage = BMS_IC[0].cells.c_codes[e] * 0.0001;
+          packCANFrame45(cellVoltage,temp1,e, maxVolt, minVolt);
+          // debugFault(4,0);
+          // debugFault(4,1);
+          // debugFault(4,2);
+          // debugFault(4,3);
+          
+        }
         sendCANFrame45();
               
       }
@@ -1174,13 +1220,16 @@ void measurement_loop(uint8_t datalog_en, int timeOut, int sync, int charging, i
 void packCANData(bool sync, bool timeOut, bool charging, bool balanceActive, bool voltFull, 
                   uint16_t balanceStatus, float vbatt, float deltaV, float temp1, float temp2) {
     // Byte 0 - Status flags
-    frame.data[0] = 0; // Clear all bits first
-    if(sync) frame.data[0] |= (1<<0);
-    if(timeOut) frame.data[0] |= (1<<1);
-    if(charging) frame.data[0] |= (1<<2);  
-    if(balanceActive) frame.data[0] |= (1<<3);
-    if(voltFull) frame.data[0] |= (1<<4);
+    // frame.data[0] = 0; // Clear all bits first
+    // if(sync) frame.data[0] |= (1<<0);
+    // if(timeOut) frame.
+    data[0] |= (1<<1);
+    // if(charging) frame.data[0] |= (1<<2);  
+    // if(balanceActive) frame.data[0] |= (1<<3);
+    // if(voltFull) frame.data[0] |= (1<<4);
     
+    frame.data[0] = charging;
+
     // Byte 1-2 - Balance cell status (10-bit representation)
     frame.data[1] = (balanceStatus >> 8) & 0xFF;  
     frame.data[2] = balanceStatus & 0xFF;        
@@ -1381,7 +1430,7 @@ void sendCANFrame3(){
   mcp2515.sendMessage(&frame);
   mcp2515.sendMessage(&frame2);
   mcp2515.sendMessage(&frame3);
-  // Serial.println("sent");
+  Serial.println("sent CAN frame123");
 }
 
 void sendCANFrame45(){
@@ -1389,6 +1438,7 @@ void sendCANFrame45(){
   // mcp2515.sendMessage(MCP2515::TXB1, &frame5);
   mcp2515.sendMessage(&frame4);
   mcp2515.sendMessage(&frame5);
+  Serial.println("sent CAN frame45");
 
 }
 
@@ -1477,7 +1527,6 @@ void deselect_LTC6811() {
 }
 
 void discharge(int selected){
-  // Serial.print("disdisdisdis"); 
   int8_t error = 0;
   wakeup_sleep(TOTAL_IC);
   LTC6811_set_discharge(selected, TOTAL_IC, BMS_IC);
@@ -1534,7 +1583,7 @@ float getTemp(int pin){
   float tempC = aa/bb;
 
   // Serial.print("voltage :");Serial.println(voltage);
-  Serial.print("tempC ");Serial.print(pin);Serial.print(": ");Serial.println(tempC);
+  // Serial.print("tempC ");Serial.print(pin);Serial.print(": ");Serial.println(tempC);
   return tempC;
 }
 

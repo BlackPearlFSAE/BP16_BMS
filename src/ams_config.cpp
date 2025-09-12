@@ -1,6 +1,5 @@
-#include <_util_AMS.h>
 #include <Arduino.h>
-
+#include <ams_config.h>
 /* ==================================================== General Functions 
 */
 // Split uint16_t to High byte and Low byte
