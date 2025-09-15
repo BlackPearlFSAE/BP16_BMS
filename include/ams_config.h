@@ -85,8 +85,6 @@ struct AMSdata {
   bool OVERTEMP_CRITICAL = 0;
   bool OVERDIV_CRITICAL = 0;
 
-  
-  bool OBC_connect = 0;
   // bool AMS_OK = 0; // Use this for Active Low Output
   bool AMS_OK = 1; // Use this for Active High Output
 };

@@ -39,19 +39,16 @@ RTOS and Push ROS topics
 #define SYNC_TIME 200
 /**************** Setup Variables *******************/
 twai_message_t sendMessage;
-twai_message_t J1939msg;
 twai_message_t receivedMessage;
+twai_message_t J1939msg;
 
 // Software Timer reference (Iniit zero)
 unsigned long reference_time = 0; 
-unsigned long reference_time2 = 0;
-unsigned long reference_time3 = 0;
 unsigned long communication_timer1 = 0;
-unsigned long shutdown_timer1 = 0;
+unsigned long shutdown_timer = 0;
 unsigned long lastModuleResponse[BMU_NUM];
 unsigned long logCount = 0;
 unsigned long lastlogtime = 0; 
-unsigned long lastStatTime = 0; 
 
 // Hardware Timer object
 hw_timer_t *My_timer1 = NULL;
@@ -76,14 +73,15 @@ volatile bool CAN_SEND_FLG2 = false;
 bool CHARGER_PLUGGED = false;
 bool CAN_TIMEOUT_FLG = false;
 // Determine BMU Charging Mode
-bool ACCUM_ReadytoCharge = 0;
+bool ACCUM_ReadytoCharge = false;
+bool ACCUM_OverDivWarn = 0;
 bool ACCUM_OverDivCritical = 0;
-bool LOW_VOLT_WARN = 0;
 bool OVER_TEMP_WARN = 0;
-bool ACCUM_FULL = 0;
-bool LOW_VOLT_CRIT = 0;
 bool OVER_TEMP_CRIT = 0;
-bool OVER_VOLT_CRIT = 0;
+bool LOW_VOLT_CRIT = 0;
+bool LOW_VOLT_WARN = 0; // Voltage sag
+bool OVER_VOLT_CRIT = 0; 
+bool ACCUM_FULL = 0; // Aka OVER_VOLT_WARN
 
 // Default Parameter preparing for BMU to save in its non-volatile memory.
 const byte Sync = SYNC_TIME; 
@@ -120,6 +118,8 @@ void debugFrame();
 bool checkModuleDisconnect(BMUdata *BMU_Package);
 void twaiTroubleshoot();
 void resetAllStruct();
+bool isModuleActive(int moduleIndex);
+void packing_AMSstruct (int moduleIndex);
 
 void logBMUdata(int moduleindex);
 void logAMSmasterdata();
@@ -172,13 +172,13 @@ void setup() {
   // Setup timer interrupt every 200ms (Discharge Mode timer)
   My_timer1 =  timerBegin(0, 80, true);  // 80 pre
   timerAttachInterrupt(My_timer1, &onTimer_dischargeMode, true);
-  timerAlarmWrite(My_timer1, 100 * 1000, true);  
+  timerAlarmWrite(My_timer1, SYNC_TIME * 1000, true);  
   timerAlarmEnable(My_timer1);
 
   // Setup timer interrupt every 500ms (Charge Mode timer)
   My_timer2 = timerBegin(1, 80, true);
   timerAttachInterrupt(My_timer2, &onTimer_chargeMode, true);
-  timerAlarmWrite(My_timer2, 500 * 1000, true);  
+  timerAlarmWrite(My_timer2, OBC_SYNC_TIME * 1000, true);  
   timerAlarmEnable(My_timer2);
 
   /* --------------------------------------------- Initialize SD card */
@@ -214,8 +214,7 @@ void loop(){
   unsigned long currentMillis = millis();
 // Check if Charger LV AUX plug is actually into ACCUM 2nd Floor connector (May change to external interrupt)
   (digitalRead(OBCIN)) ? (CHARGER_PLUGGED = true) : (CHARGER_PLUGGED = false);
-  CHARGER_PLUGGED = false;
-  AMS_Package.OBC_connect = CHARGER_PLUGGED;
+  // AMS_Package.OBC_connect = CHARGER_PLUGGED;
 // twaiTroubleshoot();
 /*___Task 1 : Communication ====================================================*/
   // BCU CMD & SYNC   (100ms cycle Broadcast to all BMU modules in Bus) 
@@ -240,8 +239,22 @@ void loop(){
   {
     // debugFrame();
     // Reset BMU data for the one that has disconnected from CAN Bus
-    // Unpack CAN frame and insert to BMU_Package[i] , AMS_Package:
+    // Unpack BMU frame and insert to BMU_Package[i] , AMS_Package:
     processBMUmsg(&receivedMessage, BMU_Package); // 200ms cycle & 500ms cycle of faultcode
+
+    // Reset Accumulator Parameter before dynamically recalculate based on BMU current state
+    AMS_Package = AMSdata();
+    // Pack BMUframe to AMSframe according to the following condition
+    for(int j = 0; j <BMU_NUM ; j++)
+    {
+      // if Module is connected to CANbus, set as connect, and recalculateAMS package a new
+      if(isModuleActive(j)){ 
+          BMU_Package[j].BMUconnected = 1;
+          packing_AMSstruct(j);
+      } else {
+          BMU_Package[j].BMUconnected = 0;
+      }
+    }
 
     if(CHARGER_PLUGGED)
       processOBCmsg(&J1939msg); // Unpack CAN frame and insert to OBC_Package:  500ms cycle 
@@ -254,9 +267,9 @@ void loop(){
   else if (currentMillis - communication_timer1 >= DISCONNENCTION_TIMEOUT){
     // Loop the Shutdown state until the CAN Bus is active again
     digitalWrite(AMS_OUT,LOW);
-    if( currentMillis - shutdown_timer1 >= 400 ){
+    if( currentMillis - shutdown_timer >= 400 ){
         Serial.println("NO_BYTE_RECV");
-        shutdown_timer1 = millis();
+        shutdown_timer = millis();
     }
     // resetAllStruct() only once
     if(CAN_TIMEOUT_FLG == false)
@@ -270,60 +283,60 @@ void loop(){
   if(checkModuleDisconnect(BMU_Package) == 0){
     // Loop the Shutdown state until the all BMU Modules are connected
     digitalWrite(AMS_OUT,LOW);
-    if( currentMillis - shutdown_timer1 >= 400 ){
+    if( currentMillis - shutdown_timer >= 400){
 
-      Serial.println("MODULE_DISCONNECT -- SHUTDOWN");
+      Serial.println("THE_FOLLOWING_BMU_ARE_DISCONNECTED -- Please connect before operate:");
       for(int i=0; i < BMU_NUM ; i++ ){
-        Serial.printf("BMU %d connection: ", i);
-        Serial.printf("%d\n",BMU_Package[i].BMUconnected);
-
+        if(!BMU_Package[i].BMUconnected){
+          Serial.printf("BMU Module no.%d \n\n", i+1);
+        }
       }
-        // Serial.printf("BMU1 connect: %d, ",BMU_Package[0].BMUconnected);
-        // Serial.printf("BMU2 connect: %d, ",BMU_Package[1].BMUconnected);
-        shutdown_timer1 = millis();
+        shutdown_timer = millis();
     }
     return;
   }
   
-
 /*___Task 2 : Determine AMS_OK relay state ==================================================== */
-    
+
     // Fault Table, OR-ed each type of Fault code bit which has been filled up when unpackBMUmsgtoAMS();
-    ( (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) || (AMS_Package.OVERVOLT_CRITICAL) ) 
+    // Old format of using both runtime calculation of ACCUM_VOLTAGE to determine VOLT_WARN & CRIT FLAG
+    // OR AMS_Package flag that is result of ORing all VOLT_WARN & CRIT of all BMU Module
+      // (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE) || (AMS_Package.OVERVOLT_CRITICAL)
+      
+    // Calculate OVERVOLT CRITITAL AND WARN FLAG , based on current voltage
+    ( (AMS_Package.ACCUM_VOLTAGE >= ACCUM_MAXVOLTAGE)) 
               ? (OVER_VOLT_CRIT = 1) : (OVER_VOLT_CRIT = 0) ;
-    ( (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE) || (AMS_Package.LOWVOLT_CRITICAL) ) 
+    ( AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE) 
+              ? (ACCUM_FULL = 1) : (ACCUM_FULL = 0);
+    ( (AMS_Package.ACCUM_VOLTAGE <= ACCUM_MINVOLTAGE)) 
               ? (LOW_VOLT_CRIT = 1) : (LOW_VOLT_CRIT = 0);
+    ( (AMS_Package.ACCUM_VOLTAGE <= 1.10 * ACCUM_MINVOLTAGE)) 
+              ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
+    
+    // Check overtemp critical and warning
     ( AMS_Package.OVERTEMP_CRITICAL > 0 ) ? (OVER_TEMP_CRIT = 1): (OVER_TEMP_CRIT = 0);
+    ( (AMS_Package.OVERTEMP_WARNING > 0)) ? (OVER_TEMP_WARN = 1) : (OVER_TEMP_WARN = 0);
+    
+    // if differential voltage between any cells are critical, then at AMS level is fault
+    (AMS_Package.OVERDIV_CRITICAL > 0) ? (ACCUM_OverDivCritical = 1) : (ACCUM_OverDivCritical = 0);
+    (AMS_Package.OVERDIV_WARNING > 0) ? (ACCUM_OverDivWarn = 1) : (ACCUM_OverDivWarn = 0);
 
     // Dashboard light & Steering wheel display: LowVoltage, Module OverTemperature, Full Voltage
-    ( (AMS_Package.ACCUM_VOLTAGE <= 1.10 * ACCUM_MINVOLTAGE) || (AMS_Package.LOWVOLT_WARNING) ) 
-              ? (LOW_VOLT_WARN = 1) : (LOW_VOLT_WARN = 0);
-    ( (AMS_Package.OVERTEMP_WARNING > 0) || (AMS_Package.OVERTEMP_WARNING) ) 
-              ? (OVER_TEMP_WARN = 1) : (OVER_TEMP_WARN = 0);
-    ( AMS_Package.ACCUM_VOLTAGE >= 0.9 * ACCUM_MAXVOLTAGE || (AMS_Package.OVERVOLT_WARNING) ) 
-              ? (ACCUM_FULL = 1) : (ACCUM_FULL = 0) ;
-
-      // OVER_TEMP_CRIT = 0;
-      // OVER_TEMP_WARN = 0;
-      // OVER_VOLT_CRIT = 0;
-      // OVER_VOLT_WARN = 0;
+    // OVER_TEMP_CRIT = 0;OVER_TEMP_WARN = 0; OVER_VOLT_CRIT = 0; OVER_VOLT_WARN = 0;
 
     // Fault Condition for AMS_OK Shutdown
     bool ACCUMULATOR_Fault;
-    ACCUMULATOR_Fault = OVER_VOLT_CRIT | LOW_VOLT_CRIT | OVER_TEMP_CRIT;
+    ACCUMULATOR_Fault = OVER_VOLT_CRIT | LOW_VOLT_CRIT | OVER_TEMP_CRIT | ACCUM_OverDivCritical;
     (ACCUMULATOR_Fault > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
-    AMS_OK = 1 ;
-/*------- Coordiante BMU cell Balancing with OBC ------------*/
-    if(CHARGER_PLUGGED)
-    {
-      uint16_t OBCFault = OBC_Package.OBCstatusbit; // 5 bit I think?
-      // if differential voltage between any cells are critical, then at AMS level is fault
-      (AMS_Package.OVERDIV_CRITICAL > 0) ? (ACCUM_OverDivCritical = 1) : (ACCUM_OverDivCritical = 0);
-      // Set ReadytoCharge Flag, only if All BMU are ready to charge.
 
+/*------- Accumulator possible fault during charging ------------*/
+    if(CHARGER_PLUGGED) { 
+      // if OBC has no fault, and Accumulator has no fault , and All BMU cells are balanced
+      uint16_t OBCFault = OBC_Package.OBCstatusbit; // 5 bit I think?
+      // Set ReadytoCharge Flag, only if All BMU are ready to charge.
       (AMS_Package.ACCUM_CHG_READY > 0) ? (ACCUM_ReadytoCharge = 1) : (ACCUM_ReadytoCharge = 0);
-      ACCUM_ReadytoCharge = 1;
-      ((ACCUMULATOR_Fault | OBCFault) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
+      
+      ((ACCUMULATOR_Fault | OBCFault | ACCUM_ReadytoCharge) > 0) ? (AMS_OK = 0) : (AMS_OK = 1);
     }
      
 /* Task 3 : Shutdown , Dash Board interaction (Should be 1st priority ) ==================================================== */ 
@@ -333,21 +346,27 @@ void loop(){
     // // For Active Low switch (Yss Blackboard)
     // (AMS_OK) ? digitalWrite(AMS_OUT,LOW) : digitalWrite(AMS_OUT,HIGH);
     
-    // (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
-    // (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
+    (LOW_VOLT_WARN) ? digitalWrite(LVlight,HIGH) : digitalWrite(LVlight,LOW);
+    (OVER_TEMP_WARN) ? digitalWrite(TEMPlight,HIGH) : digitalWrite(TEMPlight,LOW);
 
     // Debug AMS state
     if(currentMillis - reference_time >= SYNC_TIME) {
       Serial.printf("AMS_OK: %d \n", AMS_OK);
-      Serial.printf("AMS_VOLT: %f \n", AMS_Package.ACCUM_VOLTAGE);
-      Serial.printf("AMS_MAX: %f \n", AMS_Package.ACCUM_MAXVOLTAGE);
-      Serial.printf("AMS_MIN: %f \n", AMS_Package.ACCUM_MINVOLTAGE);
-      Serial.printf("OV_CRIT: %d \n", OVER_VOLT_CRIT);
-      Serial.printf("LV_CRT: %d \n", LOW_VOLT_CRIT);
-      Serial.printf("OVT_CRT: %d \n", OVER_TEMP_CRIT);
-
-      Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
-      Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
+      Serial.printf("AMS_VOLT: %2f \n", AMS_Package.ACCUM_VOLTAGE);
+      Serial.printf("AMS_MAX: %2f \n", AMS_Package.ACCUM_MAXVOLTAGE);
+      Serial.printf("AMS_MIN: %2f \n", AMS_Package.ACCUM_MINVOLTAGE);
+      
+      Serial.printf("OV_CRIT: %d \n", OVER_VOLT_CRIT); 
+      Serial.printf("ACCUM_FULL: %d \n", ACCUM_FULL);
+      Serial.printf("LV_CRIT: %d \n", LOW_VOLT_CRIT);
+      Serial.printf("LV_WARN: %d \n", LOW_VOLT_WARN);
+      Serial.printf("OV_TEMP_CRT: %d \n", OVER_TEMP_CRIT);
+      Serial.printf("OV_TEMP_WARN: %d \n", OVER_TEMP_WARN);
+      
+      Serial.printf("OV_DIV_CRT: %d \n", ACCUM_OverDivCritical);
+      Serial.printf("OV_DIV_WARN: %d \n", ACCUM_OverDivWarn);
+      // Serial.printf("OBC_VOLT: %d \n",OBC_Package.OBCVolt);
+      // Serial.printf("OBC_AMP: %d \n",OBC_Package.OBCAmp);
       // 2nd one is connected to dummy test kit
       // debugBMUmsg(0);
       // debugBMUFault(0);
@@ -356,7 +375,6 @@ void loop(){
     }
 
 /* --------------------------- SDlogger FUnction calls */
-
     // Log data Every 1000 ms
     if (currentMillis - lastlogtime  >= LOG_INTERVAL_MS) {
 
@@ -471,11 +489,12 @@ void processBMUmsg ( twai_message_t* receivedframe , BMUdata *BMU_Package) {
         // Balancing Discharge cell number
         BMU_Package[i].BalancingDischarge_Cells = mergeHLbyte(receivedframe->data[1],receivedframe->data[2]);
         // Vbatt (Module) , dVmax(cell)
-        BMU_Package[i].V_MODULE = receivedframe->data[3]; 
-        BMU_Package[i].DV = receivedframe->data[4]; 
+        BMU_Package[i].V_MODULE = mergeHLbyte(receivedframe->data[3], receivedframe->data[4]); 
+
+        BMU_Package[i].DV = receivedframe->data[5]; 
         // Temperature sensor
-        BMU_Package[i].TEMP_SENSE[0] = receivedframe->data[5];
-        BMU_Package[i].TEMP_SENSE[1] = receivedframe->data[6];
+        BMU_Package[i].TEMP_SENSE[0] = receivedframe->data[6];
+        BMU_Package[i].TEMP_SENSE[1] = receivedframe->data[7];
         break;
 
       case 2:
@@ -511,20 +530,6 @@ void processBMUmsg ( twai_message_t* receivedframe , BMUdata *BMU_Package) {
         break;
     }
   }
-  
-  // Reset Accumulator Parameter before dynamically recalculate based on BMU current state
-  AMS_Package = AMSdata();
-  // Pack BMUframe to AMSframe according to the following condition
-  for(int j = 0; j <BMU_NUM ; j++)
-  {
-    // if Module is connected to CANbus, set as connect, and recalculateAMS package a new
-    if(isModuleActive(j)){ 
-        BMU_Package[j].BMUconnected = 1;
-        packing_AMSstruct(j);
-    } else {
-        BMU_Package[j].BMUconnected = 0;
-    }
-  }
 }
 
 void processOBCmsg ( twai_message_t *J1939frame ) {
@@ -556,18 +561,18 @@ void resetModuleData(int moduleIndex){
 void packing_AMSstruct (int moduleIndex) {
   int &i = moduleIndex;
   // Recalculate AMS based on current BMU states
-  AMS_Package.ACCUM_VOLTAGE += ( static_cast<float> (BMU_Package[i].V_MODULE)) * 0.2;
-  AMS_Package.OVERVOLT_WARNING |= BMU_Package[i].OVERVOLTAGE_WARNING;
-  AMS_Package.LOWVOLT_WARNING |= BMU_Package[i].LOWVOLTAGE_WARNING;
+  AMS_Package.ACCUM_VOLTAGE += ( static_cast<float>(BMU_Package[i].V_MODULE)) * 0.2;
   AMS_Package.OVERTEMP_WARNING |= BMU_Package[i].OVERTEMP_WARNING;
-  AMS_Package.OVERDIV_CRITICAL |= BMU_Package[i].OVERDIV_VOLTAGE_WARNING;
-  AMS_Package.OVERVOLT_CRITICAL |= BMU_Package[i].OVERVOLTAGE_CRITICAL;
-  AMS_Package.LOWVOLT_CRITICAL |= BMU_Package[i].LOWVOLTAGE_CRITICAL;
   AMS_Package.OVERTEMP_CRITICAL |= BMU_Package[i].OVERTEMP_CRITICAL;
-
-  AMS_Package.ACCUM_CHG_READY &= (BMU_Package[i].BMUreadytoCharge);
+  AMS_Package.OVERDIV_WARNING |= BMU_Package[i].OVERDIV_VOLTAGE_WARNING;
   AMS_Package.OVERDIV_CRITICAL |= BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL;
   
+  AMS_Package.ACCUM_CHG_READY &= (BMU_Package[i].BMUreadytoCharge);
+  
+  // AMS_Package.OVERVOLT_CRITICAL |= BMU_Package[i].OVERVOLTAGE_CRITICAL;
+  // AMS_Package.LOWVOLT_CRITICAL |= BMU_Package[i].LOWVOLTAGE_CRITICAL;
+  // AMS_Package.OVERVOLT_WARNING |= BMU_Package[i].OVERVOLTAGE_WARNING;
+  // AMS_Package.LOWVOLT_WARNING |= BMU_Package[i].LOWVOLTAGE_WARNING;
   // Available Module , and 
 }
 void resetAllStruct(){
@@ -759,7 +764,7 @@ void logAMSmasterdata(){
   sprintf(dataString, "%u,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", 
           date,
           timestamp, 
-          AMS_Package.OBC_connect,
+          CHARGER_PLUGGED,
           AMS_Package.AMS_OK,
           AMS_Package.ACCUM_VOLTAGE,
           AMS_Package.OVERVOLT_CRITICAL,
@@ -778,70 +783,3 @@ void logAMSmasterdata(){
 }
 
 // Future update
-
-/* --------- Seriallize Specific Message of CAN data (Should be a method inside the struct , but it's alright) */
-/*
-Which function should be a method to the AMS struct ??
-- Process (receive pointer of canframe)
-- Does recalculateAMS needs to be its struct method? , and then in BMUstruct function I will refers to it as
-- Serialize function (turns struct to array in order according to https://mailkmuttacth-my.sharepoint.com/:x:/g/personal/natdanai_chin_kmutt_ac_th/ETZwCgSxlotOhV5ipbpc344BHxdTpfmnB7tHgcA94s3oEA?e=hDd82Y )
-*/
-
-// ไม่ได้ละอันนี้ต้อง log เป็น module ละไฟล์เลย
-// ต้องใช้ sprintf เพื่อ append i เข้าไปใน string ของ ชื่อไฟล์
-
-// void log1stFloordata(int moduleindex) {
-//   int &i = moduleindex;
-//   // char timestamp[13];
-//   // char date[13];
-//   // RTC_formatTime(dt, timestamp, (sizeof(timestamp) / sizeof(timestamp[0])));
-//   // RTC_formatDate(dt,date, (sizeof(date) / sizeof(date[0])));
-//   unsigned long timestamp = millis();
-
-//   char dataString1[200];
-
-//   sprintf(dataString1, "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,",
-//           timestamp, 
-//           BMU_Package[i].bmu_id, 
-//           BMU_Package[i].V_MODULE,
-//           BMU_Package[i].TEMP_SENSE[0], 
-//           BMU_Package[i].TEMP_SENSE[1], 
-//           BMU_Package[i].DV, 
-//           BMU_Package[i].BMUconnected,
-//           BMU_Package[i].BMUreadytoCharge,
-//           BMU_Package[i].BalancingDischarge_Cells,
-//           BMU_Package[i].OVERVOLTAGE_CRITICAL,
-//           BMU_Package[i].OVERVOLTAGE_WARNING,
-//           BMU_Package[i].LOWVOLTAGE_CRITICAL,
-//           BMU_Package[i].LOWVOLTAGE_WARNING,
-//           BMU_Package[i].OVERTEMP_CRITICAL,
-//           BMU_Package[i].OVERTEMP_WARNING,
-//           BMU_Package[i].OVERDIV_VOLTAGE_CRITICAL,
-//           BMU_Package[i].OVERDIV_VOLTAGE_WARNING
-//         );
-//       // THe actual size is 50 , but * 2 for fail safe
-
-//   // Second set of dataString hold cells data
-//   char dataString2[CELL_NUM];  
-//   int offset = 0;  // Track write position
-
-//   for(int j = 0; j < CELL_NUM; j++) {
-//       char voltage = BMU_Package[i].V_CELL[j];
-//       offset += snprintf(dataString2 + offset, sizeof(dataString2) - offset, "%u,", voltage);
-//   }
-
-//   // Replace last comma as \n line break
-//   if (offset > 0){
-//     dataString2[offset - 1] = '\n';
-//   } 
-  
-//   // Change BMUpackage filename to fit the BMU Module number
-//   char CSV_BMU_package[15];  // Buffer for filename (max: "8.csv" → ~6 bytes needed, 15 for safety)
-
-//   snprintf(CSV_BMU_package, sizeof(CSV_BMU_package), "/bmu%d.csv", i);
-
-//   // Log both data strings to SD card
-//   appendFile(SD, CSV_BMU_package, dataString1);
-//   appendFile(SD, CSV_BMU_package, dataString2);
-//   logCount++;
-// }
